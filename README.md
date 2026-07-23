@@ -1,6 +1,6 @@
-# POS AID TLV Agent Skill
+# POS AID/CAPK TLV Agent Skill
 
-面向 SR600 POS SDK `MfSdkEmvSetAid` 接口的共享 Agent Skill，用于解析、校验、构建和修改 AID BER-TLV 参数。
+面向 RTOS/Linux POS 设备 SDK `MfSdkEmvSetAid` 和 `MfSdkEmvSetCapk` 接口的共享 Agent Skill，用于解析、校验、构建和修改 AID/CAPK BER-TLV 参数。
 
 技能遵循开放的 Agent Skills 目录结构，可供支持 `.agents/skills/` 的 Codex、Claude Code、GitHub Copilot 等 Agent 使用。仓库不包含 POS SDK 源码。
 
@@ -27,11 +27,14 @@ git clone https://github.com/lizeyi7170-afk/pos-aid-tlv.git
 ## 能力
 
 - 解析并解释 AID TLV
+- 从截图、PDF 或表格生成 AID 参数
 - 按 SDK 实际支持的标签和长度校验
 - 修改、添加或删除指定标签
 - 检查嵌套的 other-TLV
+- 查询区分测试与生产环境的 CAPK 库
+- 校验 CAPK 模数、指数、有效期及 SHA-1
 - 输出完整 TLV Hex
-- 生成 `MfSdkEmvSetAid()` C 字节数组
+- 生成 `MfSdkEmvSetAid()` / `MfSdkEmvSetCapk()` C 字节数组
 - 识别 SDK 的静默忽略、截断、字段归零及 getter 非无损回读问题
 
 ## TLV 工具
@@ -46,13 +49,17 @@ python3 .agents/skills/pos-aid-tlv/scripts/aid_tlv.py validate "<TLV_HEX>" --str
 python3 .agents/skills/pos-aid-tlv/scripts/aid_tlv.py set "<TLV_HEX>" DF20 000000200000
 
 python3 .agents/skills/pos-aid-tlv/scripts/aid_tlv.py format-c "<TLV_HEX>" --name visa_aid_tlv
+
+python3 .agents/skills/pos-aid-tlv/scripts/capk_catalog.py lookup --rid A000000003 --index 09 --environment production
+
+python3 .agents/skills/pos-aid-tlv/scripts/capk_catalog.py validate
 ```
 
 Windows 可将 `python3` 替换为 `py -3`。
 
 ## 使用原则
 
-AID、TAC、TTQ、币种、限额、应用版本和 Kernel ID 必须来自收单机构或卡组织的认证参数，不能由 Agent 猜测。修改已有 AID 时应从完整的原始 TLV 开始，不应只提交发生变化的标签。
+AID、TAC、TTQ、币种、限额、应用版本、Kernel ID 和 CAPK 必须来自收单机构或卡组织的认证参数，不能由 Agent 猜测。修改已有记录时应从完整的原始 TLV 开始，不应只提交发生变化的标签。测试 CAPK 不能替代生产 CAPK。
 
 ## 风险与免责
 

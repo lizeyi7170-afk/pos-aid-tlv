@@ -1,4 +1,4 @@
 interface:
-  display_name: "POS AID TLV"
-  short_description: "Validate and edit POS AID TLV data"
-  default_prompt: "Use $pos-aid-tlv to inspect, validate, or modify an AID TLV for this POS SDK."
+  display_name: "POS AID and CAPK TLV"
+  short_description: "Build POS AID/CAPK TLVs from tables and profiles"
+  default_prompt: "Use $pos-aid-tlv to extract an AID or CAPK profile from a screenshot or table and produce a validated RTOS/Linux POS SDK TLV."
