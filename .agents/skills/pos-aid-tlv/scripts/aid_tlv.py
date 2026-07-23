@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, validate, edit, and format SR600 MfSdkEmvSetAid TLV data."""
+"""Inspect, validate, edit, and format RTOS/Linux MfSdkEmvSetAid TLV data."""
 
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ SPECS: Dict[str, Dict[str, object]] = {
     "DF13": {"name": "TAC Denial", "length": 5},
     "DF14": {"name": "Default DDOL", "min": 0, "max": 20},
     "DF15": {"name": "Random-selection threshold", "length": 4},
-    "DF16": {"name": "Maximum target percentage", "length": 1},
-    "DF17": {"name": "Target percentage", "length": 1},
+    "DF16": {"name": "Maximum target percentage", "length": 1, "bcd": True},
+    "DF17": {"name": "Target percentage", "length": 1, "bcd": True},
     "DF18": {"name": "Online PIN capability", "length": 1},
     "DF19": {"name": "Contactless offline limit", "length": 6, "bcd": True},
     "DF20": {"name": "Contactless transaction limit", "length": 6, "bcd": True},
@@ -65,6 +65,12 @@ SPECS: Dict[str, Dict[str, object]] = {
 NESTED_TAGS = {tag for tag, spec in SPECS.items() if spec.get("nested")}
 BCD_TAGS = {tag for tag, spec in SPECS.items() if spec.get("bcd")}
 KERNEL_IDS = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09}
+OTHER_WRAPPERS = {"contact": "DF8406", "contactless": "DF8407"}
+DEFAULT_AID_LIMITS = {
+    "DF19": bytes.fromhex("000000000000"),
+    "DF20": bytes.fromhex("999999999999"),
+    "DF21": bytes.fromhex("000000000000"),
+}
 
 
 def read_text_arg(raw: str) -> str:
@@ -227,7 +233,20 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
             errors.append(f"tag {tag} ({spec['name']}) contains a non-decimal packed-BCD nibble")
         if tag in NESTED_TAGS and item.value:
             try:
-                parse_tlv(item.value)
+                children = parse_tlv(item.value)
+                if tag == "DF8A01":
+                    child_tags = [child.tag_hex for child in children]
+                    for wrapper in ("DF8406", "DF8407"):
+                        if child_tags.count(wrapper) > 1:
+                            errors.append(f"tag DF8A01 contains duplicate nested wrapper {wrapper}")
+                    for child in children:
+                        if child.tag_hex in {"DF8406", "DF8407"} and child.value:
+                            try:
+                                parse_tlv(child.value)
+                            except TlvError as exc:
+                                errors.append(
+                                    f"tag DF8A01 child {child.tag_hex} contains malformed nested TLV: {exc}"
+                                )
             except TlvError as exc:
                 errors.append(f"tag {tag} contains malformed nested TLV: {exc}")
 
@@ -235,6 +254,11 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
         errors.append("9F09 and 9F08 map to the same field; keep only 9F09")
     if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
         warnings.append("DF8A01 takes precedence; SDK will ignore top-level DF8406/DF8407")
+    if "DF8A01" not in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+        warnings.append(
+            "top-level DF8406/DF8407 is accepted and re-wrapped by this SDK; "
+            "prefer canonical DF8A01 nesting for generated data"
+        )
     if "DF18" in grouped:
         warnings.append("MfSdkEmvSetAid forces DF18 to 01 after parsing; the supplied value is not authoritative")
 
@@ -242,9 +266,6 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
     if "DF8A01" not in grouped and sum(len(item.encoded()) for item in wrappers) > 255:
         errors.append("encoded DF8406/DF8407 other-parameter record exceeds the safe 255-byte stored length")
 
-    for tag in ("DF16", "DF17"):
-        if tag in grouped and len(grouped[tag][0].value) == 1 and grouped[tag][0].value[0] > 100:
-            errors.append(f"tag {tag} percentage must be a binary integer from 0 to 100")
     if "DF01" in grouped and len(grouped["DF01"][0].value) == 1:
         if grouped["DF01"][0].value[0] not in (0, 1):
             warnings.append("DF01 is normally 00 (exact match) or 01 (partial match); verify this profile")
@@ -270,10 +291,22 @@ def item_dict(item: Tlv, include_children: bool = True) -> Dict[str, object]:
     }
     if include_children and item.tag_hex in NESTED_TAGS and item.value:
         try:
-            result["children"] = [item_dict(child, False) for child in parse_tlv(item.value)]
+            result["children"] = [item_dict(child, child.tag_hex in NESTED_TAGS) for child in parse_tlv(item.value)]
         except TlvError as exc:
             result["nested_error"] = str(exc)
     return result
+
+
+def print_nested_items(items: Sequence[Tlv], indent: str) -> None:
+    for item in items:
+        value = item.value.hex().upper()
+        shown = value if len(value) <= 26 else value[:23] + "..."
+        print(f"{indent}-> {item.tag_hex:<8} {len(item.value):4d}  {shown}")
+        if item.tag_hex in NESTED_TAGS and item.value:
+            try:
+                print_nested_items(parse_tlv(item.value), indent + "   ")
+            except TlvError as exc:
+                print(f"{indent}   !! malformed nested TLV: {exc}")
 
 
 def print_items(items: Sequence[Tlv], indent: str = "") -> None:
@@ -285,11 +318,7 @@ def print_items(items: Sequence[Tlv], indent: str = "") -> None:
         print(f"{indent}{item.offset:6d}  {item.tag_hex:<8} {len(item.value):4d}  {shown:<30} {spec.get('name', 'SDK-unmapped')}")
         if item.tag_hex in NESTED_TAGS and item.value:
             try:
-                children = parse_tlv(item.value)
-                for child in children:
-                    child_value = child.value.hex().upper()
-                    child_shown = child_value if len(child_value) <= 26 else child_value[:23] + "..."
-                    print(f"{indent}        -> {child.tag_hex:<8} {len(child.value):4d}  {child_shown}")
+                print_nested_items(parse_tlv(item.value), indent + "        ")
             except TlvError as exc:
                 print(f"{indent}        !! malformed nested TLV: {exc}")
 
@@ -357,6 +386,92 @@ def command_set(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_set_auto(args: argparse.Namespace) -> int:
+    tag = parse_tag_arg(args.tag)
+    tag_hex = tag.hex().upper()
+    scope = args.scope
+    if scope == "auto":
+        scope = "top-level" if tag_hex in SPECS else "contactless"
+
+    if scope == "top-level":
+        items = parse_tlv(hex_to_bytes(args.tlv))
+        value = hex_to_bytes(args.value, "value")
+        print(encode_items(replace_tag(items, tag, value, args.require_existing)).hex().upper())
+        return 0
+
+    return command_set_other(
+        argparse.Namespace(
+            tlv=args.tlv,
+            scope=scope,
+            tag=args.tag,
+            value=args.value,
+            require_existing=args.require_existing,
+        )
+    )
+
+
+def command_set_other(args: argparse.Namespace) -> int:
+    items = parse_tlv(hex_to_bytes(args.tlv))
+    parameter_tag = parse_tag_arg(args.tag)
+    parameter_value = hex_to_bytes(args.value, "value")
+    wrapper_tag = bytes.fromhex(OTHER_WRAPPERS[args.scope])
+
+    grouped: Dict[str, List[Tlv]] = {}
+    for item in items:
+        grouped.setdefault(item.tag_hex, []).append(item)
+    for tag in ("DF8A01", "DF8406", "DF8407"):
+        if len(grouped.get(tag, [])) > 1:
+            raise TlvError(f"cannot safely edit duplicate top-level tag {tag}")
+    if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+        raise TlvError("DF8A01 cannot be safely combined with top-level DF8406/DF8407")
+
+    if "DF8A01" in grouped:
+        other_items = parse_tlv(grouped["DF8A01"][0].value)
+    else:
+        other_items = [
+            Tlv(tag=item.tag, value=item.value, offset=0)
+            for item in items
+            if item.tag_hex in {"DF8406", "DF8407"}
+        ]
+
+    for other_wrapper in (bytes.fromhex("DF8406"), bytes.fromhex("DF8407")):
+        if sum(item.tag == other_wrapper for item in other_items) > 1:
+            raise TlvError(
+                f"cannot safely edit duplicate nested wrapper {other_wrapper.hex().upper()}"
+            )
+    wrapper_matches = [index for index, item in enumerate(other_items) if item.tag == wrapper_tag]
+    if wrapper_matches:
+        wrapper_index = wrapper_matches[0]
+        parameters = parse_tlv(other_items[wrapper_index].value)
+        updated_parameters = replace_tag(parameters, parameter_tag, parameter_value, args.require_existing)
+        other_items[wrapper_index] = Tlv(
+            tag=wrapper_tag,
+            value=encode_items(updated_parameters),
+            offset=other_items[wrapper_index].offset,
+        )
+    else:
+        if args.require_existing:
+            raise TlvError(
+                f"tag {parameter_tag.hex().upper()} does not exist in {wrapper_tag.hex().upper()}"
+            )
+        other_items.append(
+            Tlv(
+                tag=wrapper_tag,
+                value=Tlv(tag=parameter_tag, value=parameter_value, offset=0).encoded(),
+                offset=0,
+            )
+        )
+
+    other_value = encode_items(other_items)
+    if len(other_value) > 255:
+        raise TlvError("canonical DF8A01 value exceeds the SDK's safe 255-byte stored length")
+
+    stripped_items = [item for item in items if item.tag_hex not in {"DF8A01", "DF8406", "DF8407"}]
+    final_items = replace_tag(stripped_items, bytes.fromhex("DF8A01"), other_value, False)
+    print(encode_items(final_items).hex().upper())
+    return 0
+
+
 def command_remove(args: argparse.Namespace) -> int:
     items = parse_tlv(hex_to_bytes(args.tlv))
     tag = parse_tag_arg(args.tag)
@@ -381,6 +496,21 @@ def command_build(args: argparse.Namespace) -> int:
         item = Tlv(tag=tag, value=value, offset=offset)
         items.append(item)
         offset += len(item.encoded())
+    present_tags = {item.tag_hex for item in items}
+    applied_defaults: List[str] = []
+    for tag_hex, value in DEFAULT_AID_LIMITS.items():
+        if tag_hex in present_tags:
+            continue
+        item = Tlv(tag=bytes.fromhex(tag_hex), value=value, offset=offset)
+        items.append(item)
+        offset += len(item.encoded())
+        applied_defaults.append(f"{tag_hex}={value.hex().upper()}")
+    if applied_defaults:
+        print(
+            "NOTICE: contactless limits were not specified; applied defaults: "
+            + ", ".join(applied_defaults),
+            file=sys.stderr,
+        )
     print(encode_items(items).hex().upper())
     return 0
 
@@ -409,7 +539,9 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--json", action="store_true")
     inspect_parser.set_defaults(func=command_inspect)
 
-    validate_parser = sub.add_parser("validate", help="validate against the SR600 SDK AID map")
+    validate_parser = sub.add_parser(
+        "validate", help="validate against the RTOS/Linux device SDK AID map"
+    )
     validate_parser.add_argument("tlv", help="hex, @file, or - for stdin")
     validate_parser.add_argument("--strict", action="store_true", help="return exit code 2 when warnings exist")
     validate_parser.add_argument("--json", action="store_true")
@@ -422,12 +554,42 @@ def build_parser() -> argparse.ArgumentParser:
     set_parser.add_argument("--require-existing", action="store_true")
     set_parser.set_defaults(func=command_set)
 
+    set_auto_parser = sub.add_parser(
+        "set-auto",
+        help="set a mapped tag at top level; default an unmapped tag to contactless extras",
+    )
+    set_auto_parser.add_argument("tlv")
+    set_auto_parser.add_argument("tag")
+    set_auto_parser.add_argument("value")
+    set_auto_parser.add_argument(
+        "--scope",
+        choices=("auto", "top-level", "contact", "contactless"),
+        default="auto",
+        help="override automatic placement (default: auto)",
+    )
+    set_auto_parser.add_argument("--require-existing", action="store_true")
+    set_auto_parser.set_defaults(func=command_set_auto)
+
+    set_other_parser = sub.add_parser(
+        "set-other",
+        help="set a contact/contactless extra parameter using canonical DF8A01 nesting",
+    )
+    set_other_parser.add_argument("tlv")
+    set_other_parser.add_argument("scope", choices=sorted(OTHER_WRAPPERS))
+    set_other_parser.add_argument("tag")
+    set_other_parser.add_argument("value")
+    set_other_parser.add_argument("--require-existing", action="store_true")
+    set_other_parser.set_defaults(func=command_set_other)
+
     remove_parser = sub.add_parser("remove", help="remove exactly one occurrence of a tag")
     remove_parser.add_argument("tlv")
     remove_parser.add_argument("tag")
     remove_parser.set_defaults(func=command_remove)
 
-    build = sub.add_parser("build", help="build a stream from ordered TAG=VALUE pairs")
+    build = sub.add_parser(
+        "build",
+        help="build from TAG=VALUE pairs and default missing DF19/DF20/DF21 limits",
+    )
     build.add_argument("pairs", nargs="+")
     build.set_defaults(func=command_build)
 

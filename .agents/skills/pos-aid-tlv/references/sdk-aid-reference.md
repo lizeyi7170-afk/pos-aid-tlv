@@ -1,4 +1,4 @@
-# SR600 SDK AID TLV reference
+# RTOS/Linux device SDK AID TLV reference
 
 ## Contents
 
@@ -41,8 +41,8 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 | `DF13` | 5 | `szTACRefuse_b_DF13` | TAC Denial. |
 | `DF14` | 0–20 | `szDDOL_b_DF14` | Default DDOL; DOL format is repeated `tag + one-byte requested length`, not TLV. |
 | `DF15` | 4 | `szRanhold_b_DF15` | Threshold value for biased random selection. |
-| `DF16` | 1 | `cRanMaxPer_b_DF16` | Maximum target percentage; binary integer 0–100. |
-| `DF17` | 1 | `cRanTarPer_b_DF17` | Target percentage; binary integer 0–100. |
+| `DF16` | 1 | `cRanMaxPer_b_DF16` | Maximum target percentage; project convention uses one-byte packed decimal, so decimal 99 is encoded as `99`. |
+| `DF17` | 1 | `cRanTarPer_b_DF17` | Target percentage; project convention uses one-byte packed decimal, so decimal 99 is encoded as `99`. |
 | `DF18` | 1 | `cOnlinePinCap_b_DF18` | Parsed, then unconditionally forced to `01` by `MfSdkEmvSetAid`. |
 | `DF19` | 6 | `sRf_OfflineLimit_DF19` | Contactless offline limit, 12-digit packed BCD in minor units. |
 | `DF20` | 6 | `sRF_TxnLimit_DF20` | Contactless transaction limit, 12-digit packed BCD in minor units. |
@@ -58,25 +58,54 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 | `9F15` | 2 | `szMerCateCode_9F15` | Merchant category code in packed BCD. |
 | `9F7B` | 6 | `sEcLimit_9F7B` | Electronic-cash terminal transaction limit, packed BCD. |
 | `DF810C` | 1 | `cKernelID` | `02` Mastercard, `03` Visa, `04` Amex, `05` JCB, `06` Discover, `07` UnionPay, `09` Pure. |
-| `DF8A01` | 0–255 | other-TLV record | Complete nested other-parameter TLV stream. |
-| `DF8406` | 0–250 | contact other params | Alternative top-level contact wrapper; used only when `DF8A01` is absent. |
-| `DF8407` | 0–250 | contactless other params | Alternative top-level contactless wrapper; used only when `DF8A01` is absent. |
+| `DF8A01` | 0–255 | other-TLV record | Preferred complete nested other-parameter stream. Its value normally contains `DF8406` and/or `DF8407`. |
+| `DF8406` | 0–250 | contact other params | SDK-compatible top-level shorthand; used only when `DF8A01` is absent and wrapped internally before storage. |
+| `DF8407` | 0–250 | contactless other params | SDK-compatible top-level shorthand; used only when `DF8A01` is absent and wrapped internally before storage. |
 
 Notably, tag `87` (priority) and `cAidFileType` exist in other SDK structures but are not mapped by `MfSdkEmvSetAid`; supplying them at the top level has no effect through this API.
 
+`9F66` and `DF810C` may be omitted when the source profile does not require them. For a newly generated AID, default missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`, and disclose that these values were supplied by the skill rather than the source profile.
+
 ## Other-parameter containers
 
-Choose one representation:
-
-- Put the already-encoded complete other-parameter stream inside `DF8A01`; or
-- Put contact parameters inside `DF8406` and contactless parameters inside `DF8407`. The SDK re-encodes these wrappers into its stored other-parameter record.
-
-If `DF8A01` exists, the SDK does not process `DF8406` or `DF8407`. Nested values must themselves be valid BER-TLV. The stored other-parameter stream has a one-byte length field, so keep its encoded size at or below 255 bytes.
-
-Example with one Amex contactless parameter:
+Use the complete representation by default:
 
 ```text
-DF8407099F6D01C09F6E02D8E0
+DF8A01 <length>
+  DF8406 <length> <contact parameter TLVs>
+  DF8407 <length> <contactless parameter TLVs>
+```
+
+`MfSdkEmvSetAid` also accepts `DF8406` and `DF8407` directly at the top level when `DF8A01` is absent. That is a shorthand: the SDK extracts their values, reconstructs the wrapper TLVs, and stores the resulting complete other-parameter stream. Prefer `DF8A01` when generating new data because it represents the stored hierarchy explicitly and is less dependent on this SDK convenience path.
+
+If `DF8A01` exists, the SDK copies its value directly and does not process top-level `DF8406` or `DF8407`. Do not mix the two representations. Every nested value must be valid BER-TLV. The stored other-parameter length is one byte, so keep the value of `DF8A01` at or below 255 bytes.
+
+### Default placement for a requested tag
+
+1. If the tag appears in the supported top-level table above, add or replace it at the top level.
+2. If the tag does not appear in that table, put it in contactless extra parameters by default: `DF8A01 -> DF8407 -> tag`.
+3. Use `DF8406` instead only when the user or certified profile explicitly identifies the tag as contact data.
+4. Do not place an unmapped tag at the top level; `MfSdkEmvSetAid` ignores it there.
+5. Apply this routing only to the requested tag. Preserve unrelated unknown tags already present in the source TLV and report their warnings.
+
+Use `scripts/aid_tlv.py set-auto` to apply this rule deterministically.
+
+Example: `DF811B` is absent from the SDK top-level map, so adding `DF811B=02` produces:
+
+```text
+parameter:    DF811B 01 02
+RF wrapper:   DF8407 05 DF811B0102
+full input:   DF8A01 09 DF840705DF811B0102
+encoded:      DF8A0109DF840705DF811B0102
+```
+
+Example: add the three-byte tag `DF8803` with length `03` and value `730000` to contactless extra parameters:
+
+```text
+parameter:    DF8803 03 730000
+RF wrapper:   DF8407 07 DF880303730000
+full input:   DF8A01 0B DF840707DF880303730000
+encoded:      DF8A010BDF840707DF880303730000
 ```
 
 This is only an encoding example. Scheme values must come from the applicable certified profile.
@@ -86,7 +115,7 @@ This is only an encoding example. Scheme values must come from the applicable ce
 1. `MfSdkEmvSetAid` zero-initializes `ST_TERMAID`, scans only its hard-coded tag map, and then calls `Emv_AddAID(..., YES)`. Missing tags therefore remain zero; an unknown top-level tag is ignored.
 2. Oversized mapped values are copied only up to the destination field size without returning an error. Validate before calling the SDK.
 3. `DF18` is overwritten with `YES` after TLV parsing, regardless of the supplied value.
-4. `DF8A01` is checked first. `DF8406` and `DF8407` are considered only when `DF8A01` has no value.
+4. `DF8A01` is checked first. When present, its value is copied directly to `ST_AIDOTHERTLV.szOtherTLV`. Top-level `DF8406` and `DF8407` are considered only when `DF8A01` has no value; the SDK then reconstructs those wrapper TLVs in `szOtherTLV`.
 5. `MfSdkEmvGetAid` requires an output buffer of at least 1024 bytes and uses a zero-based index.
 6. `MfSdkEmvGetAid` is not a lossless round trip: its output map omits the stored other-parameter record. Do not reconstruct a production AID solely from this output if other parameters may exist.
 7. `EMV_PrmGetAIDPrm` also does not populate the `szOtherTLV` fields used by the TLV getter path.
@@ -104,7 +133,7 @@ For an existing AID:
 
 1. Start from the complete source TLV previously used to provision it, including other parameters.
 2. Identify the record by the full `9F06` value. Do not modify another AID with the same RID prefix.
-3. Change only the requested tags and validate the full result.
+3. Change only the requested tags. Use `scripts/aid_tlv.py set-auto` for normal additions and modifications. Use `set-other` when the contact/contactless scope is explicitly supplied.
 4. Re-submit the complete TLV. Do not send only `9F06` plus the changed tag.
 5. Read back the normal fields when possible, while remembering that other parameters are omitted by the getter.
 
