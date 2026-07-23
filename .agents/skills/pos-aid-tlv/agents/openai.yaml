@@ -1,0 +1,4 @@
+interface:
+  display_name: "POS AID TLV"
+  short_description: "Validate and edit POS AID TLV data"
+  default_prompt: "Use $pos-aid-tlv to inspect, validate, or modify an AID TLV for this POS SDK."
