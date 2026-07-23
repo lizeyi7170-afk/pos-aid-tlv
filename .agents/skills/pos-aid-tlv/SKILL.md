@@ -83,8 +83,9 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
    python3 scripts/capk_tlv.py set "<CAPK_TLV_HEX>" DF04 010001 --refresh-checksum
    ```
 
-8. Validate the final TLV and report RID, index, environment, changed fields, final byte length, checksum result, and SDK caveats.
-9. If C code is requested, use `capk_tlv.py format-c`; call `MfSdkEmvSetCapk` once and require return value `0`.
+8. Validate the final TLV. When a valid CAPK TLV can be emitted, make it the first item in the final answer. Put the entire uppercase hexadecimal TLV on exactly one line in a fenced `text` code block. Keep it contiguous: do not insert line breaks, spaces, separators, comments, tag labels, or ellipses inside the TLV.
+9. After the complete TLV, report RID, index, environment, expiration date, changed or defaulted fields, final byte length, checksum result, and SDK caveats.
+10. If C code is requested, use `capk_tlv.py format-c`; call `MfSdkEmvSetCapk` once and require return value `0`.
 
 ## Tools
 
@@ -129,6 +130,8 @@ When extending `capk-catalog.json`, preserve all existing sources and records. A
 
 ## CAPK safety rules
 
+- For a successfully generated CAPK, output no prose before the complete TLV. Never split a CAPK TLV for readability, regardless of its length.
+- If required data is missing, ambiguous, or fails checksum verification, explain the blocker instead of emitting a fabricated, partial, or unverified TLV.
 - Treat every `MfSdkEmvSetCapk` call as a complete-record submission; omitted fields remain zero because the SDK zero-initializes `ST_CAPK`.
 - Require all eight mapped tags: `9F06`, `9F22`, `DF05`, `DF06`, `DF07`, `DF02`, `DF04`, and `DF03`.
 - Preserve an authoritative `DF05` value when one is supplied. If the source has no expiration date, add `DF05=20301231` and explicitly label it as the skill default.
