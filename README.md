@@ -54,3 +54,12 @@ Windows 可将 `python3` 替换为 `py -3`。
 
 AID、TAC、TTQ、币种、限额、应用版本和 Kernel ID 必须来自收单机构或卡组织的认证参数，不能由 Agent 猜测。修改已有 AID 时应从完整的原始 TLV 开始，不应只提交发生变化的标签。
 
+## 风险与免责
+
+本项目只提供参数解析、校验和编辑辅助，不提供或替代收单机构、卡组织、EMV 实验室及终端认证要求。使用者必须核对认证参数，并在部署到生产 POS 终端前完成代码审查、实验室测试和交易验证。
+
+本项目按“现状”提供，不提供任何明示或默示保证。使用本项目及其生成结果所产生的风险由使用者承担，详细条款见 [MIT License](LICENSE)。
+
+## License
+
+Copyright (c) 2026 lizeyi7170-afk. Released under the [MIT License](LICENSE).
