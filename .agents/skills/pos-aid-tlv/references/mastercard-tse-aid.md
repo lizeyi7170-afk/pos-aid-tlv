@@ -151,8 +151,7 @@ Put the complete validated TLVs first. Each TLV must be uppercase and contiguous
 on one line in its own fenced `text` block. After all TLVs, map their order to
 the report brands and give `9F06`, kernel, byte length, derivations, defaults,
 validation results, and SDK caveats. State the `5F2A` currency used and ask the
-user to confirm whether it should be changed. State that `5F36` was omitted
-when the user did not explicitly request it. If a complete profile is unavailable,
+user to confirm whether it should be changed. If a complete profile is unavailable,
 state the blocker instead of returning a partial TLV.
 
 ## Validation and reporting
@@ -171,6 +170,6 @@ For each generated AID:
 2. Require a complete set of SDK AID tags.
 3. Validate the final TLV through `aid_tlv.validate_items`.
 4. Preserve unrelated base-profile parameters.
-5. Report report-derived values, mask substitutions, authoritative currency lookup and confirmation request, explicit `5F36` inclusion or omission, base values replaced by the report, byte length, and validation warnings.
+5. Report report-derived values, mask substitutions, authoritative currency lookup and confirmation request, an explicitly supplied currency exponent, base values replaced by the report, byte length, and validation warnings.
 
 Never put `?`, `N/A`, `See ... Table`, or another placeholder into a generated hexadecimal TLV.
