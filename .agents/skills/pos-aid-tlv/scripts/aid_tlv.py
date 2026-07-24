@@ -71,6 +71,7 @@ DEFAULT_AID_LIMITS = {
     "DF20": bytes.fromhex("999999999999"),
     "DF21": bytes.fromhex("000000000000"),
 }
+DEFAULT_AID_SELECTION = bytes.fromhex("00")
 
 
 def read_text_arg(raw: str) -> str:
@@ -268,7 +269,10 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
 
     if "DF01" in grouped and len(grouped["DF01"][0].value) == 1:
         if grouped["DF01"][0].value[0] not in (0, 1):
-            warnings.append("DF01 is normally 00 (exact match) or 01 (partial match); verify this profile")
+            warnings.append(
+                "DF01 project convention uses 00 for partial matching; "
+                "verify any other profile-specific value"
+            )
     if "DF810C" in grouped and len(grouped["DF810C"][0].value) == 1:
         if grouped["DF810C"][0].value[0] not in KERNEL_IDS:
             errors.append("DF810C kernel ID is not one of 02, 03, 04, 05, 06, 07, or 09")
@@ -497,6 +501,16 @@ def command_build(args: argparse.Namespace) -> int:
         items.append(item)
         offset += len(item.encoded())
     present_tags = {item.tag_hex for item in items}
+    if "DF01" not in present_tags:
+        item = Tlv(tag=bytes.fromhex("DF01"), value=DEFAULT_AID_SELECTION, offset=offset)
+        items.append(item)
+        offset += len(item.encoded())
+        present_tags.add("DF01")
+        print(
+            "NOTICE: DF01 was not specified; applied project default DF01=00 "
+            "(partial application matching)",
+            file=sys.stderr,
+        )
     applied_defaults: List[str] = []
     for tag_hex, value in DEFAULT_AID_LIMITS.items():
         if tag_hex in present_tags:
@@ -588,7 +602,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     build = sub.add_parser(
         "build",
-        help="build from TAG=VALUE pairs and default missing DF19/DF20/DF21 limits",
+        help="build from TAG=VALUE pairs and default missing DF01/DF19/DF20/DF21",
     )
     build.add_argument("pairs", nargs="+")
     build.set_defaults(func=command_build)
