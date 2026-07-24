@@ -1,15 +1,20 @@
 {
   "schema_version": 1,
-  "description": "Machine-readable AID tag facts used by the RTOS/Linux POS SDK tooling. Detailed Mastercard interpretation is in mastercard-contactless-tags.md.",
+  "description": "Machine-readable AID tag facts shared by traditional RTOS/Linux devices and smart Android devices. Detailed Mastercard interpretation is in mastercard-contactless-tags.md.",
   "tags": {
     "DF8118": {
       "name": "CVM Capability - CVM Required",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 1,
       "value_format": "bitmap",
       "encoding": "mastercard-cvm-capability",
@@ -21,10 +26,15 @@
       "name": "CVM Capability - No CVM Required",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 1,
       "value_format": "bitmap",
       "encoding": "mastercard-cvm-capability",
@@ -39,10 +49,15 @@
       "name": "Kernel Configuration",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 1,
       "value_format": "bitmap",
       "encoding": "mastercard-kernel-configuration",
@@ -53,10 +68,15 @@
       "name": "Contactless Refund Configuration",
       "scheme": "all",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "min_length_bytes": 0,
       "max_length_bytes": 256,
       "value_format": "tlv-stream",
@@ -69,10 +89,15 @@
       "name": "Terminal Action Code - Default",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 5,
       "value_format": "binary",
       "report_group": "mastercard-contactless-tac",
@@ -82,10 +107,15 @@
       "name": "Terminal Action Code - Denial",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 5,
       "value_format": "binary",
       "report_group": "mastercard-contactless-tac",
@@ -95,10 +125,15 @@
       "name": "Terminal Action Code - Online",
       "scheme": "mastercard",
       "scope": "contactless-extra",
-      "path": [
-        "DF8A01",
-        "DF8407"
-      ],
+      "paths": {
+        "traditional": [
+          "DF8A01",
+          "DF8407"
+        ],
+        "smart": [
+          "DF8407"
+        ]
+      },
       "length_bytes": 5,
       "value_format": "binary",
       "report_group": "mastercard-contactless-tac",

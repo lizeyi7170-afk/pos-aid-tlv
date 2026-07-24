@@ -1,4 +1,4 @@
 interface:
   display_name: "POS AID and CAPK TLV"
-  short_description: "Build POS AID/CAPK TLVs from reports and profiles"
-  default_prompt: "Use $pos-aid-tlv to build complete validated RTOS/Linux POS AID or CAPK TLVs from a report or profile, placing every complete TLV before parameter explanations."
+  short_description: "Build smart or traditional POS AID/CAPK TLVs"
+  default_prompt: "Use $pos-aid-tlv to build complete validated smart Android or traditional RTOS/Linux POS AID/CAPK TLVs from a report or profile, placing every complete TLV before parameter explanations."

@@ -16,14 +16,15 @@ SDK defaults, TSE field names, and encoding identifiers.
 
 ## Placement
 
-Put all Tags covered here under:
+Use the selected device family's path:
 
-```text
-DF8A01 -> DF8407 -> parameter
-```
+| Device family | Path |
+|---|---|
+| Traditional device (RTOS/Linux) | `DF8A01 -> DF8407 -> parameter` |
+| Smart device (Android) | top-level `DF8407 -> parameter` |
 
-Do not put these Tags at the AID top level; `MfSdkEmvSetAid` does not map them
-there.
+Do not put the business parameter itself at the AID top level. Smart devices
+remove only the `DF8A01` outer container and retain `DF8407`.
 
 ## DF8118 and DF8119
 
@@ -107,15 +108,8 @@ table heading to distinguish the profiles:
 Example hierarchy:
 
 ```text
-DF8A01
-  DF8407
-    DF8120 <purchase TAC Default>
-    DF8121 <purchase TAC Denial>
-    DF8122 <purchase TAC Online>
-    DF840A
-      DF8120 <refund TAC Default>
-      DF8121 <refund TAC Denial>
-      DF8122 <refund TAC Online>
+Traditional: DF8A01 -> DF8407 -> DF8120/DF8121/DF8122/DF840A
+Smart:                    DF8407 -> DF8120/DF8121/DF8122/DF840A
 ```
 
 Do not treat different Purchase and Refund values as conflicts merely because

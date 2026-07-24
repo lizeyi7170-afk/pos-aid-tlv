@@ -230,7 +230,10 @@ class TseAidTests(unittest.TestCase):
             tse.MASTERCARD_KERNEL_CONFIGURATION_BITS["rrp_supported"],
             0x10,
         )
-        self.assertEqual(tags["DF840A"]["path"], ["DF8A01", "DF8407"])
+        self.assertEqual(
+            tags["DF840A"]["paths"]["traditional"], ["DF8A01", "DF8407"]
+        )
+        self.assertEqual(tags["DF840A"]["paths"]["smart"], ["DF8407"])
         self.assertEqual(tags["DF840A"]["transaction_type"], "20")
         self.assertEqual(tags["DF840A"]["report_table_heading_keyword"], "Refund")
         self.assertTrue(tags["DF840A"]["nested"])
@@ -384,7 +387,7 @@ class TseAidTests(unittest.TestCase):
             "B0",
         )
 
-    def test_inspect_requires_authoritative_currency_lookup_without_default(self) -> None:
+    def test_omitted_currency_code_is_silent(self) -> None:
         rows = [
             (label, "Atlantis" if label == "Deployment country" else value)
             for label, value in ROWS
@@ -392,21 +395,20 @@ class TseAidTests(unittest.TestCase):
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
         result = tse.analyze(path, self.catalog)
-        self.assertIsNone(result["currency_5F2A"])
-        self.assertTrue(result["currency_lookup_required"])
-        self.assertTrue(
-            any(
-                "authoritative ISO 4217" in notice
-                and "no 0840 fallback is permitted" in notice
-                for notice in result["notices"]
-            )
-        )
+        self.assertNotIn("currency_5F2A", result)
+        self.assertNotIn("currency_lookup_required", result)
+        self.assertFalse(any("currency" in notice.casefold() for notice in result["notices"]))
 
-    def test_build_without_currency_code_is_blocked(self) -> None:
+    def test_build_without_currency_code_omits_5f2a_and_5f36(self) -> None:
         temp, path = self.write_report(ROWS)
         self.addCleanup(temp.cleanup)
-        with self.assertRaisesRegex(tse.TseError, "no 0840 fallback is permitted"):
-            tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog)
+        self.assertNotIn("currency_5F2A", result["analysis"])
+        self.assertNotIn("currency_exponent_5F36", result["analysis"])
+        for profile in result["aids"]:
+            values = values_by_tag(profile["tlv"])
+            self.assertNotIn("5F2A", values)
+            self.assertNotIn("5F36", values)
 
     def test_supplied_iso_code_is_bcd_normalized_and_exponent_is_omitted(self) -> None:
         rows = [
@@ -427,7 +429,7 @@ class TseAidTests(unittest.TestCase):
             self.assertNotIn("5F36", values)
         self.assertTrue(
             any(
-                "confirm whether this transaction currency needs to be changed" in notice
+                "included because the currency code was explicitly supplied" in notice
                 for notice in result["analysis"]["notices"]
             )
         )
@@ -590,6 +592,106 @@ class TseAidTests(unittest.TestCase):
         values = values_by_tag(stdout.getvalue().strip())
         self.assertEqual(values["DF01"], "00")
         self.assertIn("partial application matching", stderr.getvalue())
+
+    def test_smart_device_build_uses_df8408_and_top_level_df8407(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        result = tse.build_report(path, self.catalog, "156", device="smart")
+        self.assertEqual(result["device_family"], "smart")
+
+        profiles = {item["scheme"]: item for item in result["aids"]}
+        mastercard = values_by_tag(profiles["mastercard"]["tlv"])
+        self.assertEqual(mastercard["DF8408"], "02")
+        self.assertNotIn("DF810C", mastercard)
+        self.assertNotIn("DF8A01", mastercard)
+        self.assertIn("DF8407", mastercard)
+        nested = values_by_tag(mastercard["DF8407"])
+        self.assertEqual(nested["DF8120"], "F45084800C")
+        self.assertEqual(nested["DF8121"], "0000000000")
+        self.assertEqual(nested["DF8122"], "F45084800C")
+
+        china = values_by_tag(profiles["mastercard_china"]["tlv"])
+        self.assertEqual(china["DF8408"], "07")
+        self.assertNotIn("DF810C", china)
+        self.assertNotIn("DF8A01", china)
+        for profile in result["aids"]:
+            self.assertEqual(profile["device_family"], "smart")
+            self.assertEqual(profile["kernel_tag"], "DF8408")
+            errors, warnings = aid_tlv.validate_items(
+                aid_tlv.parse_tlv(bytes.fromhex(profile["tlv"])), "smart"
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual(warnings, [])
+
+    def test_known_smart_models_are_case_insensitive_device_aliases(self) -> None:
+        for model in ("MF919", "mf360", "Mf960", "m90", "SR800"):
+            with self.subTest(model=model):
+                self.assertEqual(aid_tlv.normalize_device_family(model), "smart")
+
+        aid_args = aid_tlv.build_parser().parse_args(
+            ["validate", "9F0607A0000000041010", "--device", "MF919"]
+        )
+        self.assertEqual(aid_args.device, "smart")
+
+        tse_args = tse.build_parser().parse_args(
+            ["build", "report.html", "--device", "sr800"]
+        )
+        self.assertEqual(tse_args.device, "smart")
+
+    def test_device_conversion_preserves_logical_aid_values(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        traditional = tse.build_report(
+            path, self.catalog, "156", device="traditional"
+        )
+        smart = tse.build_report(path, self.catalog, "156", device="smart")
+        for traditional_profile, smart_profile in zip(
+            traditional["aids"], smart["aids"]
+        ):
+            converted = aid_tlv.adapt_device_items(
+                aid_tlv.parse_tlv(bytes.fromhex(smart_profile["tlv"])),
+                "traditional",
+            )
+            self.assertEqual(
+                aid_tlv.encode_items(converted).hex().upper(),
+                traditional_profile["tlv"],
+            )
+
+    def test_smart_set_other_keeps_df8407_at_top_level(self) -> None:
+        original = "9F0607A0000000041010DF84080102"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            aid_tlv.command_set_other(
+                argparse.Namespace(
+                    tlv=original,
+                    scope="contactless",
+                    tag="DF811B",
+                    value="B0",
+                    require_existing=False,
+                    device="smart",
+                )
+            )
+        top = values_by_tag(stdout.getvalue().strip())
+        self.assertNotIn("DF8A01", top)
+        self.assertEqual(
+            values_by_tag(top["DF8407"])["DF811B"],
+            "B0",
+        )
+
+    def test_device_specific_validation_rejects_opposite_envelope(self) -> None:
+        traditional = aid_tlv.parse_tlv(
+            bytes.fromhex(
+                "9F0607A0000000041010DF810C0102"
+                "DF8A0109DF840705DF811B01B0"
+            )
+        )
+        smart_errors, _ = aid_tlv.validate_items(traditional, "smart")
+        self.assertTrue(any("DF810C" in error for error in smart_errors))
+        self.assertTrue(any("DF8A01" in error for error in smart_errors))
+
+        smart = aid_tlv.adapt_device_items(traditional, "smart")
+        traditional_errors, _ = aid_tlv.validate_items(smart, "traditional")
+        self.assertTrue(any("DF8408" in error for error in traditional_errors))
 
 
 if __name__ == "__main__":

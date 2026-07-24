@@ -1,5 +1,10 @@
 # RTOS/Linux device SDK AID TLV reference
 
+This file documents the traditional-device implementation. Read
+`device-family-routing.md` before producing an Android/smart-device AID; smart
+devices share the same parameter values but use `DF8408` for Kernel ID and
+top-level `DF8406`/`DF8407` without `DF8A01`.
+
 ## Contents
 
 - Public API and source of truth
@@ -48,7 +53,7 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 | `DF20` | 6 | `sRF_TxnLimit_DF20` | Contactless transaction limit, 12-digit packed BCD in minor units. |
 | `DF21` | 6 | `sRf_CVMLimit_DF21` | Contactless CVM limit, 12-digit packed BCD in minor units. |
 | `9F1B` | 4 | `szFloorLimit_b_9F1B` | Terminal floor limit, binary amount. |
-| `5F2A` | 2 | `szCurCode_aid_5F2A` | ISO 4217 numeric transaction currency code in packed BCD. |
+| `5F2A` | 2 | `szCurCode_aid_5F2A` | ISO 4217 numeric transaction currency code in packed BCD. Omit unless the user explicitly requests it; do not infer it from deployment country. |
 | `5F36` | 1 | `cCurExp_aid_5F36` | Transaction currency exponent. Omit unless the user explicitly specifies it; do not default it to `02`. |
 | `9F3C` | 2 | `szRefCurrCode_aid_9F3C` | Reference currency code. |
 | `9F3D` | 1 | `cRefCurrExp_aid_9F3D` | Reference currency exponent. |
@@ -64,7 +69,7 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 
 Notably, tag `87` (priority) and `cAidFileType` exist in other SDK structures but are not mapped by `MfSdkEmvSetAid`; supplying them at the top level has no effect through this API.
 
-`9F66` and `DF810C` may be omitted when the source profile does not require them. For a newly generated AID, default a missing application selection indicator to `DF01=00` for partial matching. Default missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`. Disclose every value supplied by the skill rather than the source profile.
+`9F66` and `DF810C` may be omitted when the source profile does not require them. Omit `5F2A` and `5F36` unless the user explicitly requests those fields. For a newly generated AID, default a missing application selection indicator to `DF01=00` for partial matching. Default missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`. Disclose every value supplied by the skill rather than the source profile.
 
 ## Other-parameter containers
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, validate, edit, and format RTOS/Linux MfSdkEmvSetAid TLV data."""
+"""Inspect, validate, edit, and convert traditional/smart-device AID TLV data."""
 
 from __future__ import annotations
 
@@ -30,6 +30,42 @@ class TlvError(ValueError):
     pass
 
 
+SMART_DEVICE_MODELS = ("MF919", "MF360", "MF960", "M90", "SR800")
+DEVICE_ALIASES = {
+    "traditional": "traditional",
+    "rtos": "traditional",
+    "linux": "traditional",
+    "传统设备": "traditional",
+    "smart": "smart",
+    "android": "smart",
+    "intelligent": "smart",
+    "智能设备": "smart",
+    **{model.casefold(): "smart" for model in SMART_DEVICE_MODELS},
+}
+DEVICE_KERNEL_TAGS = {
+    "traditional": "DF810C",
+    "smart": "DF8408",
+}
+
+
+def normalize_device_family(raw: str) -> str:
+    normalized = DEVICE_ALIASES.get(str(raw).strip().casefold())
+    if normalized is None:
+        raise TlvError(
+            f"unknown device family {raw!r}; use traditional/RTOS/Linux, "
+            f"smart/Android, or a recognized smart model: "
+            f"{', '.join(SMART_DEVICE_MODELS)}"
+        )
+    return normalized
+
+
+def argparse_device_family(raw: str) -> str:
+    try:
+        return normalize_device_family(raw)
+    except TlvError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def default_aid_tag_registry_path() -> Path:
     return Path(__file__).resolve().parent.parent / "references" / "aid-tag-registry.json"
 
@@ -50,7 +86,13 @@ def load_contactless_parameter_specs() -> Dict[str, Dict[str, object]]:
     for tag_hex, definition in definitions.items():
         if not isinstance(definition, dict):
             raise TlvError(f"AID tag registry definition for {tag_hex} must be an object")
-        if definition.get("path") != ["DF8A01", "DF8407"]:
+        paths = definition.get("paths")
+        if not isinstance(paths, dict):
+            continue
+        if (
+            paths.get("traditional") != ["DF8A01", "DF8407"]
+            or paths.get("smart") != ["DF8407"]
+        ):
             continue
         spec: Dict[str, object] = {
             "name": definition.get("name", "Contactless extra parameter")
@@ -94,6 +136,7 @@ SPECS: Dict[str, Dict[str, object]] = {
     "9F15": {"name": "Merchant category code", "length": 2, "bcd": True},
     "9F7B": {"name": "Electronic-cash transaction limit", "length": 6, "bcd": True},
     "DF810C": {"name": "Kernel ID", "length": 1},
+    "DF8408": {"name": "Smart-device Kernel ID", "length": 1},
     "DF8A01": {"name": "Complete AID other-parameter TLV", "min": 0, "max": 255, "nested": True},
     "DF8406": {"name": "Contact other-parameter TLV", "min": 0, "max": 250, "nested": True},
     "DF8407": {"name": "Contactless other-parameter TLV", "min": 0, "max": 250, "nested": True},
@@ -112,6 +155,18 @@ DEFAULT_AID_LIMITS = {
     "DF21": bytes.fromhex("000000000000"),
 }
 DEFAULT_AID_SELECTION = bytes.fromhex("00")
+
+
+def mapped_top_level_tags(device: str) -> set:
+    family = normalize_device_family(device)
+    tags = set(SPECS)
+    tags.discard("DF810C")
+    tags.discard("DF8408")
+    tags.discard("DF8A01")
+    tags.add(DEVICE_KERNEL_TAGS[family])
+    if family == "traditional":
+        tags.add("DF8A01")
+    return tags
 
 
 def read_text_arg(raw: str) -> str:
@@ -286,7 +341,10 @@ def validate_contactless_parameters(
                 )
 
 
-def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
+def validate_items(
+    items: Sequence[Tlv], device: str = "traditional"
+) -> Tuple[List[str], List[str]]:
+    family = normalize_device_family(device)
     errors: List[str] = []
     warnings: List[str] = []
     grouped: Dict[str, List[Tlv]] = {}
@@ -301,8 +359,12 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
             errors.append(f"duplicate top-level tag {tag}; SDK lookup behavior is ambiguous")
         spec = SPECS.get(tag)
         if spec is None:
-            warnings.append(f"top-level tag {tag} is not mapped by MfSdkEmvSetAid and will be ignored")
+            warnings.append(
+                f"top-level tag {tag} is not mapped by the {family} device AID interface"
+            )
             continue
+        if tag not in mapped_top_level_tags(family):
+            errors.append(f"top-level tag {tag} is not valid for {family} device AIDs")
         item = occurrences[0]
         length = len(item.value)
         if "length" in spec and length != spec["length"]:
@@ -342,18 +404,27 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
 
     if "9F09" in grouped and "9F08" in grouped:
         errors.append("9F09 and 9F08 map to the same field; keep only 9F09")
-    if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
-        warnings.append("DF8A01 takes precedence; SDK will ignore top-level DF8406/DF8407")
-    if "DF8A01" not in grouped and ("DF8406" in grouped or "DF8407" in grouped):
-        warnings.append(
-            "top-level DF8406/DF8407 is accepted and re-wrapped by this SDK; "
-            "prefer canonical DF8A01 nesting for generated data"
-        )
-    if "DF18" in grouped:
+    if family == "traditional":
+        if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+            warnings.append(
+                "DF8A01 takes precedence; SDK will ignore top-level DF8406/DF8407"
+            )
+        if "DF8A01" not in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+            warnings.append(
+                "top-level DF8406/DF8407 is accepted and re-wrapped by this SDK; "
+                "prefer canonical DF8A01 nesting for generated traditional-device data"
+            )
+    elif "DF8A01" in grouped:
+        errors.append("smart-device AID must not contain the DF8A01 outer container")
+    if family == "traditional" and "DF18" in grouped:
         warnings.append("MfSdkEmvSetAid forces DF18 to 01 after parsing; the supplied value is not authoritative")
 
     wrappers = [item for item in items if item.tag_hex in {"DF8406", "DF8407"}]
-    if "DF8A01" not in grouped and sum(len(item.encoded()) for item in wrappers) > 255:
+    if (
+        family == "traditional"
+        and "DF8A01" not in grouped
+        and sum(len(item.encoded()) for item in wrappers) > 255
+    ):
         errors.append("encoded DF8406/DF8407 other-parameter record exceeds the safe 255-byte stored length")
 
     if "DF01" in grouped and len(grouped["DF01"][0].value) == 1:
@@ -362,9 +433,12 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
                 "DF01 project convention uses 00 for partial matching; "
                 "verify any other profile-specific value"
             )
-    if "DF810C" in grouped and len(grouped["DF810C"][0].value) == 1:
-        if grouped["DF810C"][0].value[0] not in KERNEL_IDS:
-            errors.append("DF810C kernel ID is not one of 02, 03, 04, 05, 06, 07, or 09")
+    kernel_tag = DEVICE_KERNEL_TAGS[family]
+    if kernel_tag in grouped and len(grouped[kernel_tag][0].value) == 1:
+        if grouped[kernel_tag][0].value[0] not in KERNEL_IDS:
+            errors.append(
+                f"{kernel_tag} kernel ID is not one of 02, 03, 04, 05, 06, 07, or 09"
+            )
     if "DF14" in grouped:
         dol_error = validate_dol(grouped["DF14"][0].value)
         if dol_error:
@@ -416,17 +490,36 @@ def print_items(items: Sequence[Tlv], indent: str = "") -> None:
                 print(f"{indent}        !! malformed nested TLV: {exc}")
 
 
-def emit_validation(items: Sequence[Tlv], as_json: bool, strict: bool) -> int:
-    errors, warnings = validate_items(items)
+def emit_validation(
+    items: Sequence[Tlv],
+    as_json: bool,
+    strict: bool,
+    device: str = "traditional",
+) -> int:
+    family = normalize_device_family(device)
+    errors, warnings = validate_items(items, family)
     if as_json:
-        print(json.dumps({"valid": not errors, "errors": errors, "warnings": warnings}, indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "valid": not errors,
+                    "device_family": family,
+                    "errors": errors,
+                    "warnings": warnings,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
     else:
         for message in errors:
             print(f"ERROR: {message}")
         for message in warnings:
             print(f"WARNING: {message}")
         if not errors and not warnings:
-            print("OK: TLV is structurally valid and matches the SDK AID map.")
+            print(
+                f"OK: TLV is structurally valid for the {family} device AID map."
+            )
         else:
             print(f"Summary: {len(errors)} error(s), {len(warnings)} warning(s).")
     if errors:
@@ -456,6 +549,78 @@ def encode_items(items: Iterable[Tlv]) -> bytes:
     return b"".join(item.encoded() for item in items)
 
 
+def adapt_device_items(
+    items: Sequence[Tlv], device: str
+) -> List[Tlv]:
+    """Render one logical AID record for the selected device family."""
+
+    family = normalize_device_family(device)
+    grouped: Dict[str, List[Tlv]] = {}
+    for item in items:
+        grouped.setdefault(item.tag_hex, []).append(item)
+    for tag in ("DF810C", "DF8408", "DF8A01", "DF8406", "DF8407"):
+        if len(grouped.get(tag, [])) > 1:
+            raise TlvError(f"cannot convert duplicate top-level tag {tag}")
+    if "DF810C" in grouped and "DF8408" in grouped:
+        raise TlvError("cannot convert an AID containing both DF810C and DF8408")
+    if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+        raise TlvError("cannot convert mixed DF8A01 and top-level DF8406/DF8407")
+
+    if family == "smart":
+        result: List[Tlv] = []
+        lifted_wrappers: List[Tlv] = []
+        for item in items:
+            if item.tag_hex == "DF810C":
+                result.append(Tlv(bytes.fromhex("DF8408"), item.value, item.offset))
+            elif item.tag_hex == "DF8A01":
+                lifted_wrappers = parse_tlv(item.value)
+                invalid = [
+                    wrapper.tag_hex
+                    for wrapper in lifted_wrappers
+                    if wrapper.tag_hex not in {"DF8406", "DF8407"}
+                ]
+                if invalid:
+                    raise TlvError(
+                        "DF8A01 contains non-wrapper child tags that cannot be lifted "
+                        "for a smart device: " + ", ".join(invalid)
+                    )
+                result.extend(
+                    Tlv(wrapper.tag, wrapper.value, item.offset)
+                    for wrapper in lifted_wrappers
+                )
+            else:
+                result.append(item)
+        if len({wrapper.tag_hex for wrapper in lifted_wrappers}) != len(
+            lifted_wrappers
+        ):
+            raise TlvError("DF8A01 contains duplicate DF8406/DF8407 wrappers")
+        return result
+
+    result = []
+    wrappers: List[Tlv] = []
+    wrapper_insert_index: Optional[int] = None
+    for item in items:
+        if item.tag_hex == "DF8408":
+            result.append(Tlv(bytes.fromhex("DF810C"), item.value, item.offset))
+        elif item.tag_hex in {"DF8406", "DF8407"}:
+            if wrapper_insert_index is None:
+                wrapper_insert_index = len(result)
+            wrappers.append(Tlv(item.tag, item.value, 0))
+        else:
+            result.append(item)
+    if wrappers:
+        other_value = encode_items(wrappers)
+        if len(other_value) > 255:
+            raise TlvError(
+                "traditional-device DF8A01 value exceeds the SDK's safe 255-byte length"
+            )
+        result.insert(
+            wrapper_insert_index if wrapper_insert_index is not None else len(result),
+            Tlv(bytes.fromhex("DF8A01"), other_value, 0),
+        )
+    return result
+
+
 def command_inspect(args: argparse.Namespace) -> int:
     data = hex_to_bytes(args.tlv)
     items = parse_tlv(data)
@@ -468,7 +633,12 @@ def command_inspect(args: argparse.Namespace) -> int:
 
 
 def command_validate(args: argparse.Namespace) -> int:
-    return emit_validation(parse_tlv(hex_to_bytes(args.tlv)), args.json, args.strict)
+    return emit_validation(
+        parse_tlv(hex_to_bytes(args.tlv)),
+        args.json,
+        args.strict,
+        getattr(args, "device", "traditional"),
+    )
 
 
 def command_set(args: argparse.Namespace) -> int:
@@ -483,10 +653,25 @@ def command_set_auto(args: argparse.Namespace) -> int:
     tag = parse_tag_arg(args.tag)
     tag_hex = tag.hex().upper()
     scope = args.scope
+    device = normalize_device_family(getattr(args, "device", "traditional"))
+    if tag_hex in {"DF810C", "DF8408"} and tag_hex != DEVICE_KERNEL_TAGS[device]:
+        raise TlvError(
+            f"{device} device Kernel ID must use {DEVICE_KERNEL_TAGS[device]}, not {tag_hex}"
+        )
+    if device == "smart" and tag_hex == "DF8A01":
+        raise TlvError("smart-device AID must not contain DF8A01")
     if scope == "auto":
-        scope = "top-level" if tag_hex in SPECS else "contactless"
+        scope = (
+            "top-level"
+            if tag_hex in mapped_top_level_tags(device)
+            else "contactless"
+        )
 
     if scope == "top-level":
+        if tag_hex not in mapped_top_level_tags(device):
+            raise TlvError(
+                f"top-level tag {tag_hex} is not valid for {device} device AIDs"
+            )
         items = parse_tlv(hex_to_bytes(args.tlv))
         value = hex_to_bytes(args.value, "value")
         print(encode_items(replace_tag(items, tag, value, args.require_existing)).hex().upper())
@@ -499,11 +684,13 @@ def command_set_auto(args: argparse.Namespace) -> int:
             tag=args.tag,
             value=args.value,
             require_existing=args.require_existing,
+            device=device,
         )
     )
 
 
 def command_set_other(args: argparse.Namespace) -> int:
+    device = normalize_device_family(getattr(args, "device", "traditional"))
     items = parse_tlv(hex_to_bytes(args.tlv))
     parameter_tag = parse_tag_arg(args.tag)
     parameter_value = hex_to_bytes(args.value, "value")
@@ -518,6 +705,10 @@ def command_set_other(args: argparse.Namespace) -> int:
     if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
         raise TlvError("DF8A01 cannot be safely combined with top-level DF8406/DF8407")
 
+    if device == "smart" and "DF8A01" in grouped:
+        raise TlvError(
+            "smart-device AID must use top-level DF8406/DF8407 without DF8A01"
+        )
     if "DF8A01" in grouped:
         other_items = parse_tlv(grouped["DF8A01"][0].value)
     else:
@@ -555,12 +746,18 @@ def command_set_other(args: argparse.Namespace) -> int:
             )
         )
 
-    other_value = encode_items(other_items)
-    if len(other_value) > 255:
-        raise TlvError("canonical DF8A01 value exceeds the SDK's safe 255-byte stored length")
-
     stripped_items = [item for item in items if item.tag_hex not in {"DF8A01", "DF8406", "DF8407"}]
-    final_items = replace_tag(stripped_items, bytes.fromhex("DF8A01"), other_value, False)
+    if device == "smart":
+        final_items = stripped_items + other_items
+    else:
+        other_value = encode_items(other_items)
+        if len(other_value) > 255:
+            raise TlvError(
+                "canonical DF8A01 value exceeds the SDK's safe 255-byte stored length"
+            )
+        final_items = replace_tag(
+            stripped_items, bytes.fromhex("DF8A01"), other_value, False
+        )
     print(encode_items(final_items).hex().upper())
     return 0
 
@@ -614,7 +811,21 @@ def command_build(args: argparse.Namespace) -> int:
             + ", ".join(applied_defaults),
             file=sys.stderr,
         )
-    print(encode_items(items).hex().upper())
+    device = normalize_device_family(getattr(args, "device", "traditional"))
+    print(encode_items(adapt_device_items(items, device)).hex().upper())
+    return 0
+
+
+def command_convert_device(args: argparse.Namespace) -> int:
+    items = parse_tlv(hex_to_bytes(args.tlv))
+    device = normalize_device_family(args.device)
+    converted = adapt_device_items(items, device)
+    errors, warnings = validate_items(converted, device)
+    if errors:
+        raise TlvError("; ".join(errors))
+    if args.strict and warnings:
+        raise TlvError("strict validation warnings: " + "; ".join(warnings))
+    print(encode_items(converted).hex().upper())
     return 0
 
 
@@ -646,6 +857,13 @@ def build_parser() -> argparse.ArgumentParser:
         "validate", help="validate against the RTOS/Linux device SDK AID map"
     )
     validate_parser.add_argument("tlv", help="hex, @file, or - for stdin")
+    validate_parser.add_argument(
+        "--device",
+        type=argparse_device_family,
+        choices=("traditional", "smart"),
+        default="traditional",
+        help="target device family (default: traditional)",
+    )
     validate_parser.add_argument("--strict", action="store_true", help="return exit code 2 when warnings exist")
     validate_parser.add_argument("--json", action="store_true")
     validate_parser.set_defaults(func=command_validate)
@@ -665,6 +883,13 @@ def build_parser() -> argparse.ArgumentParser:
     set_auto_parser.add_argument("tag")
     set_auto_parser.add_argument("value")
     set_auto_parser.add_argument(
+        "--device",
+        type=argparse_device_family,
+        choices=("traditional", "smart"),
+        default="traditional",
+        help="target device family (default: traditional)",
+    )
+    set_auto_parser.add_argument(
         "--scope",
         choices=("auto", "top-level", "contact", "contactless"),
         default="auto",
@@ -681,6 +906,13 @@ def build_parser() -> argparse.ArgumentParser:
     set_other_parser.add_argument("scope", choices=sorted(OTHER_WRAPPERS))
     set_other_parser.add_argument("tag")
     set_other_parser.add_argument("value")
+    set_other_parser.add_argument(
+        "--device",
+        type=argparse_device_family,
+        choices=("traditional", "smart"),
+        default="traditional",
+        help="target device family (default: traditional)",
+    )
     set_other_parser.add_argument("--require-existing", action="store_true")
     set_other_parser.set_defaults(func=command_set_other)
 
@@ -694,7 +926,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="build from TAG=VALUE pairs and default missing DF01/DF19/DF20/DF21",
     )
     build.add_argument("pairs", nargs="+")
+    build.add_argument(
+        "--device",
+        type=argparse_device_family,
+        choices=("traditional", "smart"),
+        default="traditional",
+        help="render the final AID for this device family (default: traditional)",
+    )
     build.set_defaults(func=command_build)
+
+    convert_parser = sub.add_parser(
+        "convert-device",
+        help="convert only the Kernel ID tag and extra-parameter envelope",
+    )
+    convert_parser.add_argument("tlv")
+    convert_parser.add_argument(
+        "--device",
+        type=argparse_device_family,
+        choices=("traditional", "smart"),
+        required=True,
+        help="target device family",
+    )
+    convert_parser.add_argument("--strict", action="store_true")
+    convert_parser.set_defaults(func=command_convert_device)
 
     c_parser = sub.add_parser("format-c", help="format a TLV stream as C code")
     c_parser.add_argument("tlv")

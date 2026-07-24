@@ -1,10 +1,9 @@
 {
   "schema_version": 1,
-  "description": "RTOS/Linux SDK AID base profiles used as complete-record inputs before Mastercard TSE report overrides.",
+  "description": "Shared logical AID profiles stored in traditional-device encoding before Mastercard TSE report overrides and final device-family rendering.",
+  "base_tlv_device_family": "traditional",
   "currency_policy": {
-    "require_authoritative_iso_4217_lookup": true,
-    "require_explicit_currency_code_for_build": true,
-    "forbid_unknown_country_fallback": true,
+    "omit_5f2a_unless_user_specified": true,
     "omit_5f36_unless_user_specified": true
   },
   "tse_policy": {

@@ -1,15 +1,24 @@
 ---
 name: pos-aid-tlv
-description: Inspect, extract, explain, validate, build, and modify BER-TLV AID and CAPK parameters for RTOS/Linux POS device SDKs and their MfSdkEmvSetAid and MfSdkEmvSetCapk APIs. Use when a user asks which AIDs should be configured; provides an AID parameter screenshot, image, PDF, table, Mastercard TSE/M-TIP L3 HTML report, or certification profile; mentions AID configuration, EMV application parameters, TLV hex, TAC, TTQ, contact/contactless limits, kernel ID, CAPK, CA public keys, RID, public-key index, modulus, exponent, checksum, or expiration date; or asks for C code that adds or updates an AID or CAPK. For AID configuration requests, produce complete validated AID TLVs before explaining individual Tags such as 9F06.
+description: Inspect, extract, explain, validate, build, and modify BER-TLV AID and CAPK parameters for smart Android POS devices and traditional RTOS/Linux POS devices. Use when a user asks which AIDs should be configured; provides an AID parameter screenshot, image, PDF, table, Mastercard TSE/M-TIP L3 HTML report, or certification profile; mentions Android, smart/intelligent devices, MF919, MF360, MF960, M90, SR800, RTOS/Linux, traditional devices, AID configuration, EMV application parameters, TLV hex, TAC, TTQ, contact/contactless limits, kernel ID, CAPK, CA public keys, RID, public-key index, modulus, exponent, checksum, or expiration date; or asks for code that adds or updates an AID or CAPK. For AID configuration requests, produce complete validated device-specific AID TLVs before explaining individual Tags such as 9F06.
 ---
 
 # POS AID and CAPK TLV
 
 Use the SDK implementation—not generic EMV assumptions—as the source of truth.
 
+## Device-family routing
+
+1. Read `references/device-family-routing.md` before generating or changing an AID.
+2. Treat Android, smart, intelligent, and 智能设备 as `smart`. Treat RTOS, Linux, traditional, and 传统设备 as `traditional`.
+3. Default `MF919`, `MF360`, `MF960`, `M90`, and `SR800` to `smart`, case-insensitively, and do not ask the device family when one of these models is present. An explicit device-family statement overrides the model default.
+4. Ask which device family is targeted only when an AID request has neither an explicit family nor a recognized model. Do not ask for CAPK work because both device families use the same CAPK TLV.
+5. For a traditional-device AID, use Kernel ID Tag `DF810C` and generated extra-parameter path `DF8A01 -> DF8406/DF8407`.
+6. For a smart-device AID, use Kernel ID Tag `DF8408`, omit `DF8A01`, and put `DF8406`/`DF8407` directly at the top level. Preserve the Kernel ID value and every business parameter value.
+
 ## AID parameter image/table workflow
 
-1. Read `references/sdk-aid-reference.md`, then inspect the image, PDF, or table at sufficient resolution. Transcribe every AID, parameter value, number base, unit, interface, and regional restriction. Do not guess unclear characters.
+1. Read `references/device-family-routing.md` and `references/sdk-aid-reference.md`, then inspect the image, PDF, or table at sufficient resolution. Transcribe every AID, parameter value, number base, unit, interface, and regional restriction. Do not guess unclear characters.
 2. Separate the result into confirmed source values, deterministic conversions, defaults, and unresolved values. For `DF16` and `DF17`, preserve the project percentage encoding: a source value of decimal `99` is encoded as the one-byte value `99`, not binary `63`.
 3. Map common table labels to the SDK input tags:
    - AID -> `9F06`
@@ -23,49 +32,49 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 4. Do not silently equate an "Application Priority Indicator" with `DF01`. If the table means exact/partial application selection, use `DF01`; if it means EMV tag `87`, report that `MfSdkEmvSetAid` does not map tag `87` and request the intended device configuration path.
 5. Treat DDOL as DOL bytes (`tag + requested length`), not as nested TLV. Omit parameters marked `N/A`; do not encode an empty value unless the source explicitly requires one.
 6. When a table lists multiple AIDs, generate and validate one complete TLV per AID. Apply shared parameters only when the table clearly scopes them to every listed AID, and preserve regional restrictions in the report.
-7. Determine whether the profile is contact, contactless, or both. Omit `9F66` and `DF810C` when the source does not require them. When `DF19`, `DF20`, or `DF21` is not specified for a new AID, apply `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000` for the missing fields, then state that the contactless limits were defaulted because the source did not provide them. Never infer missing currency, exponent, terminal capabilities, or other scheme values.
+7. Determine whether the profile is contact, contactless, or both. Omit `9F66` and the selected device family's Kernel ID Tag when the source does not require them. When `DF19`, `DF20`, or `DF21` is not specified for a new AID, apply `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000` for the missing fields, then state that the contactless limits were defaulted because the source did not provide them. Never infer missing currency, exponent, terminal capabilities, or other scheme values.
 
 ## AID workflow
 
-1. Read `references/sdk-aid-reference.md` and `references/aid-tag-registry.json` before changing or generating AID data. For Mastercard contactless Tags, also read `references/mastercard-contactless-tags.md`. Read `references/sdk-capk-reference.md` instead for CAPK work.
-2. Find the complete original TLV for the target AID. Do not treat a partial update as safe: `MfSdkEmvSetAid` starts from a zeroed structure, so omitted fields become zero.
-3. Never invent the AID, TAC values, currency, application version, or other business/acquirer/card-scheme values. For a new AID whose source omits the selection indicator, apply the project default `DF01=00` for partial application matching and report the default. Omit unspecified `9F66` and `DF810C`; apply only the documented `DF19`/`DF20`/`DF21` defaults when those limits are absent.
+1. Read `references/device-family-routing.md`, `references/sdk-aid-reference.md`, and `references/aid-tag-registry.json` before changing or generating AID data. For Mastercard contactless Tags, also read `references/mastercard-contactless-tags.md`. Read `references/sdk-capk-reference.md` instead for CAPK work.
+2. Find the complete original TLV for the target AID. Do not treat a partial update as safe. The traditional-device `MfSdkEmvSetAid` path starts from a zeroed structure, and both device families require a complete device-specific record for safe replacement.
+3. Never invent the AID, TAC values, currency, application version, or other business/acquirer/card-scheme values. For a new AID whose source omits the selection indicator, apply the project default `DF01=00` for partial application matching and report the default. Omit unspecified `9F66` and the selected device family's Kernel ID Tag; apply only the documented `DF19`/`DF20`/`DF21` defaults when those limits are absent.
 4. Use an available Python 3.8+ interpreter (`python3`, `py -3`, or the Agent's configured runtime). Inspect and validate the original data:
 
    ```bash
    python3 scripts/aid_tlv.py inspect "<TLV_HEX>"
-   python3 scripts/aid_tlv.py validate "<TLV_HEX>" --strict
+   python3 scripts/aid_tlv.py validate "<TLV_HEX>" --device smart --strict
    ```
 
-5. Apply only the requested tag changes. Use `set-auto` by default: it writes SDK-mapped main-structure tags at the top level and routes unmapped tags to contactless extra parameters under `DF8A01 -> DF8407`. Use `set` or `set-other` only to override that routing explicitly:
+5. Apply only the requested tag changes. Use `set-auto` with the selected `--device` by default: it writes mapped main-structure tags at the top level and routes unmapped tags to that device family's contactless extra-parameter path. Use `set` or `set-other` only to override that routing explicitly:
 
    ```bash
-   python3 scripts/aid_tlv.py set-auto "<TLV_HEX>" DF20 000000100000
-   python3 scripts/aid_tlv.py set-auto "<TLV_HEX>" DF811B 02
-   python3 scripts/aid_tlv.py set-other "<TLV_HEX>" contactless DF8803 730000
+   python3 scripts/aid_tlv.py set-auto "<TLV_HEX>" DF20 000000100000 --device smart
+   python3 scripts/aid_tlv.py set-auto "<TLV_HEX>" DF811B 02 --device smart
+   python3 scripts/aid_tlv.py set-other "<TLV_HEX>" contactless DF8803 730000 --device smart
    python3 scripts/aid_tlv.py remove "<TLV_HEX>" 9F7B
    ```
 
 6. Validate the final TLV with `--strict`. Resolve every error; explain any warning that must remain.
-7. If C code is requested, generate a byte array and call `MfSdkEmvSetAid` with the byte count:
+7. If traditional-device C code is requested, generate a byte array and call `MfSdkEmvSetAid` with the byte count:
 
    ```bash
    python3 scripts/aid_tlv.py format-c "<TLV_HEX>" --name aid_tlv
    ```
 
-8. Report the target AID, before/after values, final TLV, byte length, validation result, and any SDK-specific caveat.
+8. Report the target device family, AID, before/after values, final TLV, byte length, validation result, and any platform-specific caveat. For smart-device API-call code, require the Android API signature instead of inventing one.
 
 ## AID output contract
 
-1. Treat "which AIDs should I configure?", "what AID configuration is required?", a request to generate AIDs from a TSE/L3 report, or a TSE/L3 report supplied without a narrower question as a request for the complete validated `MfSdkEmvSetAid` TLV for every in-scope AID. Do not interpret "AID" as a request for only Tag `9F06`.
+1. Treat "which AIDs should I configure?", "what AID configuration is required?", a request to generate AIDs from a TSE/L3 report, or a TSE/L3 report supplied without a narrower question as a request for the complete validated device-specific AID TLV for every in-scope AID. Do not interpret "AID" as a request for only Tag `9F06`.
 2. When complete records can be generated, begin the final answer with the AID TLVs. Put each complete uppercase TLV on exactly one continuous line in its own fenced `text` code block. Do not insert spaces, line breaks, separators, comments, Tag labels, or ellipses inside a TLV.
-3. After all requested TLVs, explain their order and report brand, `9F06`, `DF810C`, byte length, derived/defaulted values, validation result, and necessary SDK caveats. State the ISO 4217 numeric currency encoded in `5F2A` and ask the user to confirm whether it needs to change. Do not lead with a brand/`9F06` table and do not ask whether the user wants the complete TLVs.
+3. After all requested TLVs, explain their order and report device family, brand, `9F06`, the device-specific Kernel ID Tag/value, byte length, derived/defaulted values, validation result, and necessary SDK caveats. Mention `5F2A` or `5F36` only when the user explicitly requested and the generated TLV includes it. Do not lead with a brand/`9F06` table and do not ask whether the user wants the complete TLVs.
 4. If the user explicitly requests only one brand, output only that brand's complete TLV. If a complete record cannot be generated safely, explain the exact blocker instead of returning a partial TLV or presenting a `9F06` list as the configuration result.
-5. Provide C arrays or `MfSdkEmvSetAid` calls only when requested; the default deliverable is the complete TLV.
+5. Provide API calls only when requested and the selected platform's API signature is known; the default deliverable is the complete TLV.
 
 ## Mastercard TSE/M-TIP L3 report workflow
 
-1. Read `references/mastercard-tse-aid.md`, `references/mastercard-contactless-tags.md`, `references/aid-tag-registry.json`, `references/aid-profile-catalog.json`, and `references/sdk-aid-reference.md`.
+1. Read `references/device-family-routing.md`, `references/mastercard-tse-aid.md`, `references/mastercard-contactless-tags.md`, `references/aid-tag-registry.json`, `references/aid-profile-catalog.json`, and `references/sdk-aid-reference.md`.
 2. Inspect the report before building. Parse the ordered union of contact and contactless brand lists; generate every listed supported brand, including Maestro when present:
 
    ```bash
@@ -74,14 +83,14 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 3. Treat exact report values as overrides of the complete base profile. Convert binary masks and decimal amounts only with the documented deterministic rules. Never encode `?`, `N/A`, an external-table pointer, or another placeholder.
 4. Resolve `9F33` binary masks byte by byte: default `?` to `1` in byte 1 and to `0` in byte 3; require an explicit policy for any other unresolved bit.
-5. Read the deployment country, then look up its current ISO 4217 numeric transaction-currency code from the authoritative ISO 4217 Maintenance Agency source. Pass the looked-up code with `--currency-code`; never use `0840` or another code as an unknown-country fallback. ISO codes are three decimal digits, while `5F2A` is two-byte packed BCD, so the generator left-pads the value (for example, Malaysia `458` becomes `5F2A=0458`). In the answer, state the `5F2A` value used and ask the user to confirm whether the transaction currency should be changed. Do not configure `5F36` unless the user explicitly specifies a currency exponent; only then pass `--currency-exponent`.
-6. Keep contact TAC at the top level and use the registry mapping for Mastercard/Maestro contactless TAC under `DF8A01 -> DF8407`. Preserve each contactless TAC table heading: apply the standard Purchase set to normal `DF8407`, and encode a table whose heading identifies Refund under `DF8407 -> DF840A`. Do not merge same-named TAC rows across transaction tables or report them as conflicts when their headings distinguish Purchase from Refund. Follow the SDK mapping even when a base template has Default and Online values swapped, and report the correction.
-7. Stop for any listed brand that still lacks a complete base profile. Maestro uses the catalog profile `9F06=A0000000043060`, `DF810C=02`, the Mastercard field-mapping and nesting rules, Maestro-scoped TSE values, and the fixed `9F1D=4C00800000000000`; do not substitute Mastercard-scoped TAC, limit, or CVM values when Maestro-specific values are present.
+5. Omit `5F2A` and `5F36` unless the user explicitly requests those currency fields. A deployment country in the report does not authorize either Tag and must not trigger a lookup, default, question, or warning. When the user explicitly requests `5F2A` but supplies only a country or currency name, look up the current ISO 4217 numeric code from the authoritative Maintenance Agency source and pass it with `--currency-code`. The generator left-pads three digits to four packed-BCD digits, for example `458` becomes `5F2A=0458`. Pass `--currency-exponent` only when the user also explicitly requests `5F36`.
+6. Keep contact TAC at the top level and use the registry's device-specific path for Mastercard/Maestro contactless TAC. Preserve each contactless TAC table heading: apply the standard Purchase set to normal `DF8407`, and encode a table whose heading identifies Refund under `DF8407 -> DF840A`. Do not merge same-named TAC rows across transaction tables or report them as conflicts when their headings distinguish Purchase from Refund. Follow the SDK mapping even when a base template has Default and Online values swapped, and report the correction.
+7. Stop for any listed brand that still lacks a complete base profile. Maestro uses the catalog profile `9F06=A0000000043060`, logical Kernel ID `02`, the Mastercard field-mapping and device-specific nesting rules, Maestro-scoped TSE values, and the fixed `9F1D=4C00800000000000`; do not substitute Mastercard-scoped TAC, limit, or CVM values when Maestro-specific values are present.
 8. Build and validate every result:
 
    ```bash
-   python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --currency-code 458
-   python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --currency-code 458
+   python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --device smart
+   python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --device smart
    ```
 
 9. Follow the AID output contract. Emit every complete generated TLV before report analysis or Tag explanations; a list of brands, `9F06` values, or kernel IDs is supplemental context, not the requested configuration.
@@ -121,16 +130,17 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 ## Tools
 
-`scripts/aid_tlv.py` accepts contiguous hex, spaced hex, `0xNN` arrays, C `\xNN` strings, `@path` to read a file, or `-` to read stdin. It has these commands:
+`scripts/aid_tlv.py` accepts contiguous hex, spaced hex, `0xNN` arrays, C `\xNN` strings, `@path` to read a file, or `-` to read stdin. Device-aware commands accept `--device traditional|smart` and preserve traditional behavior when the option is omitted. It has these commands:
 
 - `inspect`: decode tags, lengths, values, and known nested other-parameter TLVs.
 - `validate`: check BER-TLV structure, SDK-supported tags, field lengths, duplicates, required `9F06`, common value constraints, and SDK traps.
-- `set-auto`: set an SDK-mapped tag at the top level; otherwise default it to canonical contactless extra parameters.
+- `set-auto`: set a mapped tag at the top level; otherwise default it to the selected device family's contactless extra parameters.
 - `set`: replace a tag in place or append it if absent.
-- `set-other`: add or replace a contact/contactless extra parameter using canonical `DF8A01` nesting.
+- `set-other`: add or replace a contact/contactless extra parameter using the selected device family's canonical nesting.
 - `remove`: remove one tag.
 - `build`: assemble a TLV from ordered `TAG=VALUE` pairs and add the documented `DF01`/`DF19`/`DF20`/`DF21` defaults when those fields are omitted.
-- `format-c`: generate a C byte array and `MfSdkEmvSetAid` call.
+- `convert-device`: change only the Kernel ID Tag and extra-parameter envelope for the selected device family.
+- `format-c`: generate a traditional-device C byte array and `MfSdkEmvSetAid` call.
 
 `scripts/capk_tlv.py` accepts the same input forms. It provides `inspect`, `validate`, `set`, `build`, `checksum`, `refresh-checksum`, and `format-c`.
 
@@ -142,9 +152,9 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 `scripts/mastercard_tse_aid.py` parses Mastercard TSE/M-TIP L3 HTML reports:
 
-- `inspect`: list report brands, deployment country, and deterministically resolved `9F33`; without `--currency-code`, report that an authoritative currency lookup is still required.
-- `build`: overlay report TAC, limits, capabilities, and the explicitly supplied regional currency onto complete catalog profiles and emit one validated TLV per listed AID.
-- `validate`: require every listed brand to have a complete profile and validate every generated TLV.
+- `inspect`: list report brands, deployment country, and deterministically resolved `9F33`; omit currency fields silently unless explicitly supplied.
+- `build`: overlay report TAC, limits, capabilities, and any explicitly requested currency fields onto complete catalog profiles and emit one validated device-specific TLV per listed AID.
+- `validate`: require every listed brand to have a complete profile and validate every generated TLV for the selected device family.
 
 `references/aid-tag-registry.json` is the machine-readable source for migrated AID Tag length, placement, nesting, encoding, report-field mapping, and SDK-default omission rules. Put detailed Mastercard bit semantics in `references/mastercard-contactless-tags.md`; do not duplicate them in `SKILL.md`.
 
@@ -156,23 +166,23 @@ When extending `capk-catalog.json`, preserve all existing sources and records. A
 
 - Prefer `9F09` over its accepted alias `9F08`; never include both.
 - Interpret `DF01=00` as partial application matching in this project. For a new AID whose source omits `DF01`, default it to `00` and disclose the default.
-- Before adding a tag, check the SDK top-level map. If the tag is absent, default it to contactless extra parameters with `set-auto`; do not append it at the top level, where `MfSdkEmvSetAid` would ignore it. Route it to contact parameters only when the user or certified profile explicitly says it is contact data.
+- Before adding a tag, check the selected device family's top-level map. If the tag is absent, default it to contactless extra parameters with `set-auto`; do not append the business parameter itself at the top level. Route it to contact parameters only when the user or certified profile explicitly says it is contact data.
 - Do not automatically relocate unrelated unknown tags already present in the original TLV.
-- Prefer the complete other-parameter representation: top-level `DF8A01`, containing `DF8406` for contact parameters and/or `DF8407` for contactless parameters. Put the business parameter TLV inside the applicable wrapper.
-- Treat `DF840A` as the contactless refund-configuration container. Put it under `DF8A01 -> DF8407 -> DF840A`; its value must be a complete BER-TLV stream containing the parameters to apply when transaction type `0x20` selects a contactless refund. Never put `DF840A` at the AID top level.
+- Use the selected device family's extra-parameter representation from `device-family-routing.md`: traditional devices use `DF8A01 -> DF8406/DF8407`, while smart devices use top-level `DF8406/DF8407` without `DF8A01`.
+- Treat `DF840A` as the contactless refund-configuration container. Put it under the selected device family's `DF8407`; its value must be a complete BER-TLV stream containing the parameters to apply when transaction type `0x20` selects a contactless refund. Never put `DF840A` at the AID top level.
 - For Mastercard contactless `DF8118`, `DF8119`, `DF811B`, `DF8120`, `DF8121`, and `DF8122`, use `references/aid-tag-registry.json` as the machine-readable source and `references/mastercard-contactless-tags.md` for interpretation. Do not maintain duplicate bit maps, TAC mappings, or SDK defaults here.
-- Accept top-level `DF8406`/`DF8407` only as an SDK-compatible shorthand when `DF8A01` is absent; `MfSdkEmvSetAid` re-encodes those wrappers before storage.
-- Never combine `DF8A01` with top-level `DF8406` or `DF8407`; `DF8A01` takes precedence and the top-level wrappers are ignored.
-- Do not promise that `DF18` changes online PIN capability: this SDK forces it to `01` inside `MfSdkEmvSetAid`.
+- For traditional devices, accept top-level `DF8406`/`DF8407` only as an SDK-compatible shorthand when `DF8A01` is absent; `MfSdkEmvSetAid` re-encodes those wrappers before storage. For smart devices, top-level `DF8406`/`DF8407` is the required representation.
+- Never combine `DF8A01` with top-level `DF8406` or `DF8407`. Smart-device AIDs must omit `DF8A01`.
+- For traditional devices, do not promise that `DF18` changes online PIN capability: this SDK forces it to `01` inside `MfSdkEmvSetAid`.
 - Encode `DF16` and `DF17` using the project percentage convention; decimal `99` is the one-byte value `99`, not binary `63`.
-- Allow `9F66` and `DF810C` to remain absent when the source profile does not specify them.
+- Allow `9F66` and the device-specific Kernel ID Tag to remain absent when the source profile does not specify them.
 - For a newly built AID, default any missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`. Explicitly report that these defaults were applied because the source did not specify the limits.
 - For a Mastercard TSE/M-TIP report, use the report's exact limits instead of the generic new-AID defaults. Left-pad decimal contactless amounts to 12 digits before packed-BCD encoding.
 - Keep TSE base profiles in `references/aid-profile-catalog.json`. Do not generate a listed brand whose complete base TLV is absent.
-- Never answer an AID-configuration or TSE-report request with only brand names, `9F06`, or `DF810C`. Return complete validated AID TLVs first whenever they can be generated safely.
+- Never answer an AID-configuration or TSE-report request with only brand names, `9F06`, or Kernel ID. Return complete validated device-specific AID TLVs first whenever they can be generated safely.
 - Treat TSE `9F33` question marks as constrained mask bits, not hexadecimal input. Apply only the documented byte-specific substitutions and report them.
-- Resolve TSE currency by looking up the deployment country's current numeric code from the authoritative ISO 4217 Maintenance Agency source. Supply that code explicitly to the generator, encode its three digits as four packed-BCD digits in `5F2A`, and never use `0840` as an unknown-country fallback. Tell the user which `5F2A` was used and ask whether it should change.
-- Omit `5F36` unless the user explicitly specifies a currency exponent. Do not infer or default `5F36=02` from the ISO minor-unit column or from a prior profile.
+- Omit `5F2A` unless the user explicitly requests a transaction currency code. Do not infer it from deployment country, a catalog profile, or a prior report; do not mention its omission. When explicitly requested, encode the confirmed ISO 4217 numeric code as four packed-BCD digits.
+- Omit `5F36` unless the user explicitly requests a currency exponent. Do not infer or default `5F36=02` from the ISO minor-unit column or from a prior profile, and do not mention its omission.
 - Do not use `MfSdkEmvGetAid` as a lossless backup of other parameters; it does not return the stored `DF8A01`/`DF8406`/`DF8407` content.
 - Preserve the original tag order unless there is a concrete reason to change it.
 - When editing repository code, locate the actual configuration call site before changing files and keep unrelated AIDs untouched.

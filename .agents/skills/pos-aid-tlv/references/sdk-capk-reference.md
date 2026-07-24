@@ -1,4 +1,8 @@
-# RTOS/Linux device SDK CAPK TLV reference
+# Shared traditional/smart device CAPK TLV reference
+
+The API examples below use the traditional RTOS/Linux SDK. Smart Android
+devices use the same CAPK Tags, values, catalog records, validation, and final
+TLV bytes.
 
 ## Contents
 

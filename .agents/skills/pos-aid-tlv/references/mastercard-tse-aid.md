@@ -12,7 +12,10 @@
 
 ## Scope and source precedence
 
-Use `scripts/mastercard_tse_aid.py` for Mastercard TSE/M-TIP L3 HTML reports. Generate one complete `MfSdkEmvSetAid` TLV for every AID brand listed under either the contact or contactless interface.
+Use `scripts/mastercard_tse_aid.py` for Mastercard TSE/M-TIP L3 HTML reports.
+Generate one complete device-specific AID TLV for every AID brand listed under
+either the contact or contactless interface. Read `device-family-routing.md`
+and select `--device traditional` or `--device smart`.
 
 Apply values in this order:
 
@@ -23,7 +26,8 @@ Apply values in this order:
 Do not reuse a previous report's values merely because most fields are similar. Do not emit a final TLV when a listed brand has no complete base profile.
 
 Maestro uses the complete catalog profile with `9F06=A0000000043060`,
-`DF810C=02`, and fixed `9F1D=4C00800000000000`. Apply the same
+logical Kernel ID `02`, and fixed `9F1D=4C00800000000000`. Encode the Kernel
+ID as `DF810C` for traditional devices or `DF8408` for smart devices. Apply the same
 Mastercard tag placement, conversion, default-omission, and nesting rules, but
 take TAC, limits, CVM, and other scheme-scoped values from the Maestro rows in
 the current report whenever they are present. When the report has
@@ -81,9 +85,11 @@ The SDK source defines `DF11` as TAC Default and `DF12` as TAC Online. If a base
 
 For transaction-specific contactless TAC tables:
 
-- Put the standard Purchase TAC set directly under `DF8A01 -> DF8407`.
+- Put the standard Purchase TAC set under the registry path:
+  `DF8A01 -> DF8407` for traditional devices or top-level `DF8407` for smart
+  devices.
 - When a table heading identifies Refund, encode its complete TAC set as the
-  value of `DF840A` under `DF8A01 -> DF8407`.
+  value of `DF840A` under the selected device family's `DF8407`.
 - Keep `DF8120` as Default, `DF8121` as Denial, and `DF8122` as Online inside
   both sets.
 - If multiple non-refund transaction tables contain different TAC sets and no
@@ -113,11 +119,20 @@ Example:
 ???00000 11111000 11?01000 -> 11100000 11111000 11001000 -> E0F8C8
 ```
 
-Read `Deployment country`, then use an internet or connected authoritative lookup against the current ISO 4217 Maintenance Agency list to obtain the country's three-digit numeric transaction-currency code. Pass that value explicitly as `--currency-code`. The generator left-pads it to four decimal digits for the two-byte packed-BCD `5F2A` value; for example, Malaysia's ISO code `458` becomes `5F2A=0458`.
+Do not configure `5F2A` or `5F36` from the report's deployment country. Omit
+both Tags silently unless the user explicitly requests them.
 
-Never use `0840`, a catalog mapping, or a previous report as an unknown-country fallback. If the deployment country is missing, ambiguous, or has more than one plausible transaction currency, stop and obtain confirmation instead of choosing one.
+When the user explicitly requests `5F2A`, accept a confirmed three-digit ISO
+4217 numeric code through `--currency-code`; the generator left-pads it to four
+packed-BCD digits, for example `458` becomes `5F2A=0458`. If the user requests
+the Tag but supplies only a country or currency name, use the current official
+ISO 4217 Maintenance Agency list to resolve the code. Stop for ambiguity rather
+than choosing a fallback.
 
-Do not configure `5F36` by default. Omit it unless the user explicitly specifies a currency exponent, in which case pass `--currency-exponent`. Do not infer `5F36` from the ISO 4217 minor-unit column.
+Configure `5F36` only when the user explicitly requests an exponent and pass
+it with `--currency-exponent`. Require `--currency-code` with it. Do not infer
+either Tag from a catalog profile, previous report, deployment country, or ISO
+minor-unit column, and do not mention omitted currency Tags.
 
 ## Profile requirements
 
@@ -126,12 +141,16 @@ Every profile must declare:
 - stable profile ID
 - report brand name
 - exact `9F06`
-- `DF810C`
+- logical Kernel ID
 - complete base TLV
 - environment and source
 - any certified fixed overrides
 
 The base TLV supplies fields the report normally omits, including `DF01`, `9F09`, `DF14`, `DF15`, `DF16`, `DF17`, and SDK-specific contactless parameters. This project interprets `DF01=00` as partial application matching and uses it as the normal new-AID default.
+
+The catalog stores complete base TLVs in traditional-device form. The generator
+applies TSE values to that shared logical profile, then renders the final
+device-specific envelope without changing business parameter values.
 
 Current catalog status:
 
@@ -144,14 +163,14 @@ Current catalog status:
 Treat a request asking which AIDs should be configured, a request to generate
 AIDs from a TSE report, or a supplied TSE report without a narrower question as
 a request for every complete in-scope AID TLV. Do not stop after identifying
-brands, `9F06`, or `DF810C`, and do not ask whether the user also wants the
+brands, `9F06`, or a Kernel ID Tag, and do not ask whether the user also wants the
 complete records.
 
 Put the complete validated TLVs first. Each TLV must be uppercase and contiguous
 on one line in its own fenced `text` block. After all TLVs, map their order to
 the report brands and give `9F06`, kernel, byte length, derivations, defaults,
-validation results, and SDK caveats. State the `5F2A` currency used and ask the
-user to confirm whether it should be changed. If a complete profile is unavailable,
+validation results, and SDK caveats. Mention `5F2A` or `5F36` only when it was
+explicitly requested and included. If a complete profile is unavailable,
 state the blocker instead of returning a partial TLV.
 
 ## Validation and reporting
@@ -160,16 +179,16 @@ Run:
 
 ```bash
 python3 scripts/mastercard_tse_aid.py inspect "<REPORT.html>"
-python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --currency-code 458
-python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --currency-code 458
+python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --device smart
+python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --device smart
 ```
 
 For each generated AID:
 
-1. Verify the catalog identity and kernel ID.
+1. Verify the catalog identity, Kernel ID value, and device-specific Kernel ID Tag.
 2. Require a complete set of SDK AID tags.
-3. Validate the final TLV through `aid_tlv.validate_items`.
+3. Validate the final TLV through `aid_tlv.validate_items` with the selected device family.
 4. Preserve unrelated base-profile parameters.
-5. Report report-derived values, mask substitutions, authoritative currency lookup and confirmation request, an explicitly supplied currency exponent, base values replaced by the report, byte length, and validation warnings.
+5. Report report-derived values, mask substitutions, explicitly requested currency fields, base values replaced by the report, byte length, and validation warnings. Do not mention omitted `5F2A` or `5F36`.
 
 Never put `?`, `N/A`, `See ... Table`, or another placeholder into a generated hexadecimal TLV.

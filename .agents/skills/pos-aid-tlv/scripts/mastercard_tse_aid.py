@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract Mastercard TSE/M-TIP HTML and build complete RTOS/Linux SDK AID TLVs."""
+"""Extract Mastercard TSE/M-TIP HTML and build traditional/smart-device AID TLVs."""
 
 from __future__ import annotations
 
@@ -52,10 +52,19 @@ def load_tag_registry(path: Optional[Path] = None) -> Dict[str, object]:
         definition = tags[tag_hex]
         if not isinstance(definition, dict):
             raise TseError(f"AID tag registry definition for {tag_hex} must be an object")
-        path_value = definition.get("path")
-        if path_value != ["DF8A01", "DF8407"]:
+        paths = definition.get("paths")
+        if not isinstance(paths, dict):
             raise TseError(
-                f"AID tag registry path for {tag_hex} must be DF8A01 -> DF8407"
+                f"AID tag registry paths for {tag_hex} must be an object"
+            )
+        if paths.get("traditional") != ["DF8A01", "DF8407"]:
+            raise TseError(
+                f"traditional AID tag registry path for {tag_hex} must be "
+                "DF8A01 -> DF8407"
+            )
+        if paths.get("smart") != ["DF8407"]:
+            raise TseError(
+                f"smart AID tag registry path for {tag_hex} must be DF8407"
             )
     encodings = data.get("encodings")
     if not isinstance(encodings, dict):
@@ -367,6 +376,10 @@ def load_catalog(path: Path) -> Dict[str, object]:
     catalog = json.loads(path.read_text(encoding="utf-8"))
     if catalog.get("schema_version") != 1:
         raise TseError("unsupported AID profile catalog schema")
+    if catalog.get("base_tlv_device_family") != "traditional":
+        raise TseError(
+            "AID profile catalog must declare base_tlv_device_family=traditional"
+        )
     if not isinstance(catalog.get("profiles"), list):
         raise TseError("AID profile catalog has no profiles array")
     return catalog
@@ -412,21 +425,13 @@ def resolve_currency(
     fields: Dict[str, List[str]],
     currency_code: Optional[str],
     currency_exponent: Optional[str],
-    required: bool,
 ) -> Tuple[Optional[str], Optional[str], List[str]]:
     deployment = get_value(fields, "Deployment country")
     country_text = deployment or "the report's deployment country"
     if currency_exponent is not None and currency_code is None:
         raise TseError("--currency-exponent requires --currency-code")
     if currency_code is None:
-        message = (
-            f"currency is unresolved: look up the authoritative ISO 4217 numeric "
-            f"currency code for {country_text!r}, then rerun with --currency-code; "
-            "no 0840 fallback is permitted"
-        )
-        if required:
-            raise TseError(message)
-        return None, None, [message]
+        return None, None, []
 
     code_digits = re.sub(r"\s", "", currency_code)
     if not re.fullmatch(r"\d{3,4}", code_digits):
@@ -436,9 +441,8 @@ def resolve_currency(
         )
     code = code_digits.zfill(4)
     notices = [
-        f"5F2A={code} uses the supplied ISO 4217 numeric currency code for "
-        f"deployment country {country_text}; confirm whether this transaction "
-        "currency needs to be changed"
+        f"5F2A={code} included because the currency code was explicitly supplied "
+        f"for deployment country {country_text}"
     ]
 
     exponent: Optional[str] = None
@@ -652,10 +656,12 @@ def build_one(
     profile: Dict[str, object],
     fields: Dict[str, List[str]],
     terminal_capabilities: str,
-    currency_code: str,
+    currency_code: Optional[str],
     currency_exponent: Optional[str],
     transaction_tac_groups: Sequence[Dict[str, object]] = (),
+    device: str = "traditional",
 ) -> Dict[str, object]:
+    device_family = aid_tlv.normalize_device_family(device)
     base_tlv = profile.get("base_tlv")
     if not isinstance(base_tlv, str) or not base_tlv:
         raise TseError(
@@ -684,10 +690,10 @@ def build_one(
         items = set_top(items, "9F1B", "00000000")
 
     items = set_top(items, "9F33", terminal_capabilities)
-    items = set_top(items, "5F2A", currency_code)
-    if currency_exponent is None:
-        items = [item for item in items if item.tag_hex != "5F36"]
-    else:
+    items = [item for item in items if item.tag_hex not in {"5F2A", "5F36"}]
+    if currency_code is not None:
+        items = set_top(items, "5F2A", currency_code)
+    if currency_exponent is not None:
         items = set_top(items, "5F36", currency_exponent)
 
     fixed = profile.get("fixed_overrides", {})
@@ -812,9 +818,12 @@ def build_one(
     if refund_updates:
         refund_tlv = encode_contactless_tac_set(refund_updates)
         items = set_contactless(items, {"DF840A": refund_tlv})
-        notices.append(
-            "refund contactless TAC encoded under DF8A01 -> DF8407 -> DF840A"
+        refund_path = (
+            "DF8A01 -> DF8407 -> DF840A"
+            if device_family == "traditional"
+            else "DF8407 -> DF840A"
         )
+        notices.append(f"refund contactless TAC encoded under {refund_path}")
 
     required = {
         "9F06",
@@ -833,7 +842,6 @@ def build_one(
         "DF21",
         "9F1B",
         "9F33",
-        "5F2A",
         "DF810C",
     }
     if profile.get("scheme") == "mastercard_china":
@@ -842,7 +850,13 @@ def build_one(
     if missing:
         raise TseError(f"profile {profile.get('id')} is missing required tags: {', '.join(missing)}")
 
-    errors, warnings = aid_tlv.validate_items(items)
+    items = aid_tlv.adapt_device_items(items, device_family)
+    final_kernel_tag = aid_tlv.DEVICE_KERNEL_TAGS[device_family]
+    if tag_value(items, final_kernel_tag) != expected_kernel:
+        raise TseError(
+            f"profile {profile.get('id')} rendered Kernel ID does not match catalog"
+        )
+    errors, warnings = aid_tlv.validate_items(items, device_family)
     if errors:
         raise TseError(f"profile {profile.get('id')} failed SDK validation: {'; '.join(errors)}")
     final = aid_tlv.encode_items(items)
@@ -852,6 +866,8 @@ def build_one(
         "report_name": report_name,
         "aid": expected_aid,
         "kernel_id": expected_kernel,
+        "kernel_tag": final_kernel_tag,
+        "device_family": device_family,
         "byte_length": len(final),
         "tlv": final.hex().upper(),
         "notices": notices,
@@ -864,7 +880,6 @@ def analyze(
     catalog: Dict[str, object],
     currency_code: Optional[str] = None,
     currency_exponent: Optional[str] = None,
-    require_currency: bool = False,
 ) -> Dict[str, object]:
     rows = read_report(path)
     fields = index_rows(rows)
@@ -872,7 +887,7 @@ def analyze(
     tac_groups = contactless_tac_groups(path, brands)
     terminal_capabilities, cap_notices = resolve_9f33(fields, catalog)
     resolved_currency, resolved_exponent, currency_notices = resolve_currency(
-        fields, currency_code, currency_exponent, require_currency
+        fields, currency_code, currency_exponent
     )
     result: Dict[str, object] = {
         "report": str(path),
@@ -880,8 +895,6 @@ def analyze(
         "deployment_country": get_value(fields, "Deployment country"),
         "brands": brands,
         "terminal_capabilities_9F33": terminal_capabilities,
-        "currency_5F2A": resolved_currency,
-        "currency_lookup_required": resolved_currency is None,
         "contactless_tac_tables": {
             report_name: [
                 {
@@ -895,9 +908,12 @@ def analyze(
         },
         "notices": cap_notices + currency_notices,
         "_fields": fields,
+        "_currency_5F2A": resolved_currency,
         "_currency_exponent_5F36": resolved_exponent,
         "_contactless_tac_groups": tac_groups,
     }
+    if resolved_currency is not None:
+        result["currency_5F2A"] = resolved_currency
     if resolved_exponent is not None:
         result["currency_exponent_5F36"] = resolved_exponent
     return result
@@ -908,13 +924,14 @@ def build_report(
     catalog: Dict[str, object],
     currency_code: Optional[str] = None,
     currency_exponent: Optional[str] = None,
+    device: str = "traditional",
 ) -> Dict[str, object]:
+    device_family = aid_tlv.normalize_device_family(device)
     analysis = analyze(
         path,
         catalog,
         currency_code=currency_code,
         currency_exponent=currency_exponent,
-        require_currency=True,
     )
     profiles = profiles_by_report_name(catalog)
     results: List[Dict[str, object]] = []
@@ -927,13 +944,18 @@ def build_report(
                 profile,
                 analysis["_fields"],  # type: ignore[arg-type,index]
                 str(analysis["terminal_capabilities_9F33"]),
-                str(analysis["currency_5F2A"]),
+                analysis["_currency_5F2A"],  # type: ignore[arg-type]
                 analysis["_currency_exponent_5F36"],  # type: ignore[arg-type]
                 analysis["_contactless_tac_groups"].get(str(brand), []),  # type: ignore[index,union-attr]
+                device_family,
             )
         )
     public_analysis = {key: value for key, value in analysis.items() if not key.startswith("_")}
-    return {"analysis": public_analysis, "aids": results}
+    return {
+        "device_family": device_family,
+        "analysis": public_analysis,
+        "aids": results,
+    }
 
 
 def print_analysis(result: Dict[str, object]) -> None:
@@ -941,10 +963,8 @@ def print_analysis(result: Dict[str, object]) -> None:
     print(f"Rows: {result['row_count']}")
     print(f"Brands: {', '.join(result['brands'])}")  # type: ignore[arg-type]
     print(f"9F33: {result['terminal_capabilities_9F33']}")
-    currency = result["currency_5F2A"]
-    if currency is None:
-        print("Currency: unresolved")
-    else:
+    currency = result.get("currency_5F2A")
+    if currency is not None:
         exponent = result.get("currency_exponent_5F36")
         if exponent is None:
             print(f"Currency: 5F2A={currency}")
@@ -984,12 +1004,14 @@ def command_inspect(args: argparse.Namespace) -> int:
 
 
 def command_build(args: argparse.Namespace) -> int:
+    device = getattr(args, "device", "traditional")
     catalog = load_catalog(Path(args.catalog))
     result = build_report(
         Path(args.report),
         catalog,
         currency_code=args.currency_code,
         currency_exponent=args.currency_exponent,
+        device=device,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -1001,7 +1023,10 @@ def command_build(args: argparse.Namespace) -> int:
         for index, aid in enumerate(result["aids"], start=1):  # type: ignore[index]
             print()
             print(f"[{index}] {aid['report_name']} ({aid['aid']})")
-            print(f"Bytes: {aid['byte_length']}; Kernel: {aid['kernel_id']}")
+            print(
+                f"Device: {aid['device_family']}; Bytes: {aid['byte_length']}; "
+                f"Kernel: {aid['kernel_tag']}={aid['kernel_id']}"
+            )
             for notice in aid["notices"]:
                 print(f"NOTICE: {notice}")
             for warning in aid["validation_warnings"]:
@@ -1010,13 +1035,18 @@ def command_build(args: argparse.Namespace) -> int:
 
 
 def command_validate(args: argparse.Namespace) -> int:
+    device = getattr(args, "device", "traditional")
     result = build_report(
         Path(args.report),
         load_catalog(Path(args.catalog)),
         currency_code=args.currency_code,
         currency_exponent=args.currency_exponent,
+        device=device,
     )
-    print(f"OK: generated and validated {len(result['aids'])} complete AID TLV(s).")
+    print(
+        f"OK: generated and validated {len(result['aids'])} complete "
+        f"{result['device_family']} device AID TLV(s)."
+    )
     return 0
 
 
@@ -1038,8 +1068,8 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument(
             "--currency-code",
             help=(
-                "authoritatively looked-up ISO 4217 numeric currency code "
-                "(for example 458; encoded as 5F2A=0458)"
+                "explicitly requested ISO 4217 numeric currency code for 5F2A "
+                "(for example 458; encoded as 5F2A=0458); omit by default"
             ),
         )
         child.add_argument(
@@ -1049,6 +1079,14 @@ def build_parser() -> argparse.ArgumentParser:
                 "the user requested 5F36"
             ),
         )
+        if name in {"build", "validate"}:
+            child.add_argument(
+                "--device",
+                type=aid_tlv.argparse_device_family,
+                choices=("traditional", "smart"),
+                default="traditional",
+                help="target device family (default: traditional)",
+            )
         if name != "validate":
             child.add_argument("--json", action="store_true")
         child.set_defaults(func=function)
