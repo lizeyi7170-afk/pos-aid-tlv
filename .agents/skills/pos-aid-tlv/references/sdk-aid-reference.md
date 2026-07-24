@@ -74,6 +74,7 @@ Use the complete representation by default:
 DF8A01 <length>
   DF8406 <length> <contact parameter TLVs>
   DF8407 <length> <contactless parameter TLVs>
+    DF840A <length> <contactless refund parameter TLVs>
 ```
 
 `MfSdkEmvSetAid` also accepts `DF8406` and `DF8407` directly at the top level when `DF8A01` is absent. That is a shorthand: the SDK extracts their values, reconstructs the wrapper TLVs, and stores the resulting complete other-parameter stream. Prefer `DF8A01` when generating new data because it represents the stored hierarchy explicitly and is less dependent on this SDK convenience path.
@@ -109,6 +110,36 @@ encoded:      DF8A010BDF840707DF880303730000
 ```
 
 This is only an encoding example. Scheme values must come from the applicable certified profile.
+
+### Contactless refund parameters
+
+Use `DF840A` as a nested container for the parameter stream that applies to a
+contactless refund:
+
+```text
+DF8A01
+  DF8407
+    <normal contactless parameter TLVs>
+    DF840A
+      <contactless refund parameter TLVs>
+```
+
+`SaveEmvAidOtherParamListData_ex` removes `DF840A` from the normal contactless
+parameter list and, when transaction type is `0x20`, loads the TLV stream in its
+value as the refund configuration. Consequently:
+
+- Put `DF840A` inside `DF8407`, normally under top-level `DF8A01`.
+- Encode the value of `DF840A` as a complete BER-TLV stream, not as an opaque
+  flag or a single transaction-type byte.
+- Keep ordinary `DF8407` children as the normal contactless configuration.
+- Do not put `DF840A` at the AID top level, where `MfSdkEmvSetAid` does not map
+  it.
+- Respect the enclosing `DF8407` and `DF8A01` size limits even though the
+  refund handler's local buffer accepts up to 256 value bytes.
+
+Use `set-auto` or `set-other ... contactless` with Tag `DF840A`; both produce
+the required `DF8A01 -> DF8407 -> DF840A` placement. Validate the completed AID
+so the nested refund value is checked as TLV.
 
 ### Mastercard contactless parameters
 

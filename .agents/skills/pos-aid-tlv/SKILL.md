@@ -27,7 +27,7 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 ## AID workflow
 
-1. Read `references/sdk-aid-reference.md` before changing or generating AID data. For Mastercard contactless Tags, also read `references/mastercard-contactless-tags.md` and `references/aid-tag-registry.json`. Read `references/sdk-capk-reference.md` instead for CAPK work.
+1. Read `references/sdk-aid-reference.md` and `references/aid-tag-registry.json` before changing or generating AID data. For Mastercard contactless Tags, also read `references/mastercard-contactless-tags.md`. Read `references/sdk-capk-reference.md` instead for CAPK work.
 2. Find the complete original TLV for the target AID. Do not treat a partial update as safe: `MfSdkEmvSetAid` starts from a zeroed structure, so omitted fields become zero.
 3. Never invent the AID, TAC values, currency, application version, or other business/acquirer/card-scheme values. For a new AID whose source omits the selection indicator, apply the project default `DF01=00` for partial application matching and report the default. Omit unspecified `9F66` and `DF810C`; apply only the documented `DF19`/`DF20`/`DF21` defaults when those limits are absent.
 4. Use an available Python 3.8+ interpreter (`python3`, `py -3`, or the Agent's configured runtime). Inspect and validate the original data:
@@ -137,7 +137,7 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 - `build`: overlay report TAC, limits, capabilities, and regional currency onto complete catalog profiles and emit one validated TLV per listed AID.
 - `validate`: require every listed brand to have a complete profile and validate every generated TLV.
 
-`references/aid-tag-registry.json` is the machine-readable source for migrated AID Tag length, placement, encoding, report-field mapping, and SDK-default omission rules. Put detailed Mastercard bit semantics in `references/mastercard-contactless-tags.md`; do not duplicate them in `SKILL.md`.
+`references/aid-tag-registry.json` is the machine-readable source for migrated AID Tag length, placement, nesting, encoding, report-field mapping, and SDK-default omission rules. Put detailed Mastercard bit semantics in `references/mastercard-contactless-tags.md`; do not duplicate them in `SKILL.md`.
 
 `scripts/import_worldpay_capk_pdf.py` reproducibly rebuilds the Worldpay Test4 records from the source PDF. `scripts/import_worldpay_production_capk_pdf.py` extracts and checksum-verifies the Worldpay Production3 records for merging into the mixed-environment catalog. Keep source-specific import logic separate from the generic catalog query tool.
 
@@ -150,6 +150,7 @@ When extending `capk-catalog.json`, preserve all existing sources and records. A
 - Before adding a tag, check the SDK top-level map. If the tag is absent, default it to contactless extra parameters with `set-auto`; do not append it at the top level, where `MfSdkEmvSetAid` would ignore it. Route it to contact parameters only when the user or certified profile explicitly says it is contact data.
 - Do not automatically relocate unrelated unknown tags already present in the original TLV.
 - Prefer the complete other-parameter representation: top-level `DF8A01`, containing `DF8406` for contact parameters and/or `DF8407` for contactless parameters. Put the business parameter TLV inside the applicable wrapper.
+- Treat `DF840A` as the contactless refund-configuration container. Put it under `DF8A01 -> DF8407 -> DF840A`; its value must be a complete BER-TLV stream containing the parameters to apply when transaction type `0x20` selects a contactless refund. Never put `DF840A` at the AID top level.
 - For Mastercard contactless `DF8118`, `DF8119`, `DF811B`, `DF8120`, `DF8121`, and `DF8122`, use `references/aid-tag-registry.json` as the machine-readable source and `references/mastercard-contactless-tags.md` for interpretation. Do not maintain duplicate bit maps, TAC mappings, or SDK defaults here.
 - Accept top-level `DF8406`/`DF8407` only as an SDK-compatible shorthand when `DF8A01` is absent; `MfSdkEmvSetAid` re-encodes those wrappers before storage.
 - Never combine `DF8A01` with top-level `DF8406` or `DF8407`; `DF8A01` takes precedence and the top-level wrappers are ignored.

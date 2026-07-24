@@ -211,6 +211,48 @@ class TseAidTests(unittest.TestCase):
             tse.MASTERCARD_KERNEL_CONFIGURATION_BITS["rrp_supported"],
             0x10,
         )
+        self.assertEqual(tags["DF840A"]["path"], ["DF8A01", "DF8407"])
+        self.assertEqual(tags["DF840A"]["transaction_type"], "20")
+        self.assertTrue(tags["DF840A"]["nested"])
+
+    def test_contactless_refund_configuration_is_nested_and_validated(self) -> None:
+        refund_parameters = "DF8120050000000000"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            aid_tlv.command_set_auto(
+                argparse.Namespace(
+                    tlv="9F0607A0000000041010",
+                    tag="DF840A",
+                    value=refund_parameters,
+                    scope="auto",
+                    require_existing=False,
+                )
+            )
+        result_hex = stdout.getvalue().strip()
+        top = values_by_tag(result_hex)
+        wrappers = aid_tlv.parse_tlv(bytes.fromhex(top["DF8A01"]))
+        contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
+        contactless_parameters = values_by_tag(contactless.value.hex())
+        self.assertEqual(contactless_parameters["DF840A"], refund_parameters)
+        refund_nested = values_by_tag(contactless_parameters["DF840A"])
+        self.assertEqual(refund_nested["DF8120"], "0000000000")
+        errors, warnings = aid_tlv.validate_items(
+            aid_tlv.parse_tlv(bytes.fromhex(result_hex))
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(warnings, [])
+
+    def test_malformed_contactless_refund_configuration_is_rejected(self) -> None:
+        malformed = "9F0607A0000000041010DF8A0109DF840705DF840A01FF"
+        errors, _ = aid_tlv.validate_items(
+            aid_tlv.parse_tlv(bytes.fromhex(malformed))
+        )
+        self.assertTrue(
+            any(
+                "DF840A contains malformed nested TLV" in error
+                for error in errors
+            )
+        )
 
     def test_cvm_capability_bits(self) -> None:
         self.assertEqual(tse.cvm_capability("Signature, Online PIN", "test"), "60")

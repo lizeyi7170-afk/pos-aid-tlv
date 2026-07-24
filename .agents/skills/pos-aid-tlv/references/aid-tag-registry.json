@@ -46,6 +46,21 @@
       "sdk_default": "20",
       "omit_when_sdk_default": true
     },
+    "DF840A": {
+      "name": "Contactless Refund Configuration",
+      "scheme": "all",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "min_length_bytes": 0,
+      "max_length_bytes": 256,
+      "value_format": "tlv-stream",
+      "nested": true,
+      "transaction_type": "20",
+      "source_field": "Contactless refund parameter TLV stream"
+    },
     "DF8120": {
       "name": "Terminal Action Code - Default",
       "scheme": "mastercard",
@@ -131,6 +146,10 @@
     {
       "id": "mastercard-kernel-tag-definitions",
       "description": "User-provided Mastercard tag definition excerpts and TSE interpretation rules, 2026-07-24."
+    },
+    {
+      "id": "sdk-contactless-refund-config",
+      "description": "DF840A handling in SaveEmvAidOtherParamListData_ex and DEF_TAG_CONTACTLESS_REFUN_CONFIG, confirmed by the user on 2026-07-24."
     }
   ]
 }
