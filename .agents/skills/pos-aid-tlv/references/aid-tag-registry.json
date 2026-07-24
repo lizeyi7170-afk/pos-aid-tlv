@@ -62,6 +62,7 @@
       "value_format": "tlv-stream",
       "nested": true,
       "transaction_type": "20",
+      "report_table_heading_keyword": "Refund",
       "source_field": "Contactless refund parameter TLV stream"
     },
     "DF8120": {

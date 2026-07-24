@@ -19,7 +19,6 @@ Apply values in this order:
 1. Exact values and constraints in the current TSE report.
 2. Explicit fixed overrides recorded in `aid-profile-catalog.json`.
 3. The selected complete base profile.
-4. The documented unknown-country currency fallback only.
 
 Do not reuse a previous report's values merely because most fields are similar. Do not emit a final TLV when a listed brand has no complete base profile.
 
@@ -34,6 +33,11 @@ capability, derive and emit `DF8119=28` for Signature plus No CVM.
 ## Report extraction
 
 Treat the HTML as a label/value table collection. The export can contain malformed table nesting, so parse closed `tr` rows and their `td` or `th` cells without relying on strict DOM hierarchy.
+
+Preserve the first-column heading of every contactless TAC table. Repeated
+labels such as `TAC Default`, `TAC Online`, and `TAC Denial` belong to distinct
+transaction profiles when their table headings differ; do not flatten them
+into one label/value map before classifying the table.
 
 Use both brand fields:
 
@@ -75,6 +79,16 @@ For Mastercard China, honor an explicit report label such as `Floor Limit value 
 
 The SDK source defines `DF11` as TAC Default and `DF12` as TAC Online. If a base template contains the report's online value in `DF11` or default value in `DF12`, replace them according to the SDK mapping and report the change.
 
+For transaction-specific contactless TAC tables:
+
+- Put the standard Purchase TAC set directly under `DF8A01 -> DF8407`.
+- When a table heading identifies Refund, encode its complete TAC set as the
+  value of `DF840A` under `DF8A01 -> DF8407`.
+- Keep `DF8120` as Default, `DF8121` as Denial, and `DF8122` as Online inside
+  both sets.
+- If multiple non-refund transaction tables contain different TAC sets and no
+  SDK transaction container is defined for them, stop instead of choosing one.
+
 ## Amount, mask, and currency conversions
 
 Convert contactless `DF19`, `DF20`, and `DF21` amounts to 12 decimal digits by left-padding with zeroes, then encode them as six packed-BCD bytes:
@@ -99,9 +113,11 @@ Example:
 ???00000 11111000 11?01000 -> 11100000 11111000 11001000 -> E0F8C8
 ```
 
-Resolve the transaction currency from `Deployment country` through `aid-profile-catalog.json`. Current confirmed mappings are China to `5F2A=0156` and the United States to `5F2A=0840`, both with `5F36=02`.
+Read `Deployment country`, then use an internet or connected authoritative lookup against the current ISO 4217 Maintenance Agency list to obtain the country's three-digit numeric transaction-currency code. Pass that value explicitly as `--currency-code`. The generator left-pads it to four decimal digits for the two-byte packed-BCD `5F2A` value; for example, Malaysia's ISO code `458` becomes `5F2A=0458`.
 
-If no country mapping is known, use `5F2A=0840` and `5F36=02`, and explicitly tell the user that currency `0840` was defaulted and must be changed if it is not the actual transaction currency. If multiple listed countries resolve to different currencies, stop for clarification.
+Never use `0840`, a catalog mapping, or a previous report as an unknown-country fallback. If the deployment country is missing, ambiguous, or has more than one plausible transaction currency, stop and obtain confirmation instead of choosing one.
+
+Do not configure `5F36` by default. Omit it unless the user explicitly specifies a currency exponent, in which case pass `--currency-exponent`. Do not infer `5F36` from the ISO 4217 minor-unit column.
 
 ## Profile requirements
 
@@ -134,7 +150,9 @@ complete records.
 Put the complete validated TLVs first. Each TLV must be uppercase and contiguous
 on one line in its own fenced `text` block. After all TLVs, map their order to
 the report brands and give `9F06`, kernel, byte length, derivations, defaults,
-validation results, and SDK caveats. If a complete profile is unavailable,
+validation results, and SDK caveats. State the `5F2A` currency used and ask the
+user to confirm whether it should be changed. State that `5F36` was omitted
+when the user did not explicitly request it. If a complete profile is unavailable,
 state the blocker instead of returning a partial TLV.
 
 ## Validation and reporting
@@ -143,8 +161,8 @@ Run:
 
 ```bash
 python3 scripts/mastercard_tse_aid.py inspect "<REPORT.html>"
-python3 scripts/mastercard_tse_aid.py build "<REPORT.html>"
-python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>"
+python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --currency-code 458
+python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --currency-code 458
 ```
 
 For each generated AID:
@@ -153,6 +171,6 @@ For each generated AID:
 2. Require a complete set of SDK AID tags.
 3. Validate the final TLV through `aid_tlv.validate_items`.
 4. Preserve unrelated base-profile parameters.
-5. Report report-derived values, mask substitutions, currency derivation or fallback, base values replaced by the report, byte length, and validation warnings.
+5. Report report-derived values, mask substitutions, authoritative currency lookup and confirmation request, explicit `5F36` inclusion or omission, base values replaced by the report, byte length, and validation warnings.
 
 Never put `?`, `N/A`, `See ... Table`, or another placeholder into a generated hexadecimal TLV.

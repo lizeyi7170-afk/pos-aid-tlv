@@ -49,7 +49,7 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 | `DF21` | 6 | `sRf_CVMLimit_DF21` | Contactless CVM limit, 12-digit packed BCD in minor units. |
 | `9F1B` | 4 | `szFloorLimit_b_9F1B` | Terminal floor limit, binary amount. |
 | `5F2A` | 2 | `szCurCode_aid_5F2A` | ISO 4217 numeric transaction currency code in packed BCD. |
-| `5F36` | 1 | `cCurExp_aid_5F36` | Transaction currency exponent. |
+| `5F36` | 1 | `cCurExp_aid_5F36` | Transaction currency exponent. Omit unless the user explicitly specifies it; do not default it to `02`. |
 | `9F3C` | 2 | `szRefCurrCode_aid_9F3C` | Reference currency code. |
 | `9F3D` | 1 | `cRefCurrExp_aid_9F3D` | Reference currency exponent. |
 | `9F1D` | 0–8 | `cRiskManage_aid_9F1D` | Terminal risk-management data. |

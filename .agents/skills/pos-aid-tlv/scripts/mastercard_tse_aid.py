@@ -23,6 +23,7 @@ REQUIRED_REGISTRY_TAGS = {
     "DF8118",
     "DF8119",
     "DF811B",
+    "DF840A",
     "DF8120",
     "DF8121",
     "DF8122",
@@ -83,6 +84,10 @@ SDK_CONTACTLESS_DEFAULTS = {
     for tag_hex, definition in TAG_DEFINITIONS.items()
     if definition.get("omit_when_sdk_default")
 }
+
+REFUND_TAC_HEADING_KEYWORD = str(
+    TAG_DEFINITIONS["DF840A"].get("report_table_heading_keyword", "Refund")
+).casefold()
 
 DF8119_FALLBACK_BY_DF8118 = {
     df8118.upper(): df8119.upper()
@@ -174,6 +179,66 @@ def read_report(path: Path) -> List[Row]:
     if not parser.rows:
         raise TseError("the HTML report contains no two-column table rows")
     return parser.rows
+
+
+def contactless_tac_groups(
+    path: Path, report_names: Sequence[str]
+) -> Dict[str, List[Dict[str, object]]]:
+    html = path.read_text(encoding="utf-8")
+    result: Dict[str, List[Dict[str, object]]] = {
+        report_name: [] for report_name in report_names
+    }
+    for match in re.finditer(
+        r"<table\b[^>]*>(.*?)</table\s*>", html, flags=re.IGNORECASE | re.DOTALL
+    ):
+        parser = TseRowParser()
+        parser.feed("<table>" + match.group(1) + "</table>")
+        parser.close()
+        heading = next(
+            (
+                row.label
+                for row in parser.rows
+                if row.label.casefold().startswith("terminal action codes -")
+            ),
+            None,
+        )
+        if heading is None:
+            continue
+        for report_name in report_names:
+            prefix = profile_prefix(report_name)
+            updates: Dict[str, str] = {}
+            for parameter_name, tag_hex in MASTERCARD_CONTACTLESS_TAC_TAGS.items():
+                label = prefix + parameter_name
+                values = [
+                    row.value for row in parser.rows if row.label == label and row.value
+                ]
+                unique = list(dict.fromkeys(values))
+                if len(unique) > 1:
+                    raise TseError(
+                        f"{heading} contains conflicting {report_name} {parameter_name} values"
+                    )
+                if unique:
+                    updates[tag_hex] = clean_hex(
+                        unique[0], f"{heading} {report_name} {parameter_name}", 5
+                    )
+            if not updates:
+                continue
+            if len(updates) != len(MASTERCARD_CONTACTLESS_TAC_TAGS):
+                raise TseError(
+                    f"{heading} has an incomplete {report_name} contactless TAC set"
+                )
+            result[report_name].append(
+                {
+                    "heading": heading,
+                    "kind": (
+                        "refund"
+                        if REFUND_TAC_HEADING_KEYWORD in heading.casefold()
+                        else "standard"
+                    ),
+                    "values": updates,
+                }
+            )
+    return result
 
 
 def index_rows(rows: Iterable[Row]) -> Dict[str, List[str]]:
@@ -344,40 +409,54 @@ def resolve_9f33(fields: Dict[str, List[str]], catalog: Dict[str, object]) -> Tu
 
 
 def resolve_currency(
-    fields: Dict[str, List[str]], catalog: Dict[str, object]
-) -> Tuple[str, str, List[str], bool]:
+    fields: Dict[str, List[str]],
+    currency_code: Optional[str],
+    currency_exponent: Optional[str],
+    required: bool,
+) -> Tuple[Optional[str], Optional[str], List[str]]:
     deployment = get_value(fields, "Deployment country")
-    aliases: Dict[str, Tuple[str, str]] = {}
-    for raw in catalog.get("country_currency", []):
-        if not isinstance(raw, dict):
-            continue
-        code = raw.get("code")
-        exponent = raw.get("exponent")
-        for name in raw.get("names", []):
-            if isinstance(name, str) and isinstance(code, str) and isinstance(exponent, str):
-                aliases[name.casefold()] = (code.upper(), exponent.upper())
-    matches: List[Tuple[str, str]] = []
-    if deployment:
-        for country in [normalize_text(item) for item in deployment.split(",")]:
-            match = aliases.get(country.casefold())
-            if match and match not in matches:
-                matches.append(match)
-    if len(matches) > 1:
-        raise TseError(
-            f"deployment countries resolve to multiple transaction currencies: {deployment!r}"
+    country_text = deployment or "the report's deployment country"
+    if currency_exponent is not None and currency_code is None:
+        raise TseError("--currency-exponent requires --currency-code")
+    if currency_code is None:
+        message = (
+            f"currency is unresolved: look up the authoritative ISO 4217 numeric "
+            f"currency code for {country_text!r}, then rerun with --currency-code; "
+            "no 0840 fallback is permitted"
         )
-    if matches:
-        code, exponent = matches[0]
-        return code, exponent, [f"currency derived from deployment country {deployment}: {code}/{exponent}"], False
-    fallback = catalog.get("unknown_currency_default")
-    if not isinstance(fallback, dict):
-        raise TseError("catalog has no unknown_currency_default")
-    code = str(fallback.get("code", "")).upper()
-    exponent = str(fallback.get("exponent", "")).upper()
-    notice = str(fallback.get("notice", "unknown currency default applied"))
-    clean_hex(code, "default currency code", 2)
-    clean_hex(exponent, "default currency exponent", 1)
-    return code, exponent, [notice], True
+        if required:
+            raise TseError(message)
+        return None, None, [message]
+
+    code_digits = re.sub(r"\s", "", currency_code)
+    if not re.fullmatch(r"\d{3,4}", code_digits):
+        raise TseError(
+            "--currency-code must be a three-digit ISO 4217 numeric code or its "
+            "four-digit packed-BCD form"
+        )
+    code = code_digits.zfill(4)
+    notices = [
+        f"5F2A={code} uses the supplied ISO 4217 numeric currency code for "
+        f"deployment country {country_text}; confirm whether this transaction "
+        "currency needs to be changed"
+    ]
+
+    exponent: Optional[str] = None
+    if currency_exponent is None:
+        notices.append(
+            "5F36 omitted because the user did not explicitly specify a currency exponent"
+        )
+    else:
+        exponent_digits = re.sub(r"\s", "", currency_exponent)
+        if not re.fullmatch(r"\d{1,2}", exponent_digits):
+            raise TseError(
+                "--currency-exponent must be one or two decimal digits"
+            )
+        exponent = exponent_digits.zfill(2)
+        notices.append(
+            f"5F36={exponent} included because the currency exponent was explicitly supplied"
+        )
+    return code, exponent, notices
 
 
 def set_top(items: Sequence[aid_tlv.Tlv], tag_hex: str, value_hex: str) -> List[aid_tlv.Tlv]:
@@ -524,6 +603,51 @@ def report_tac(fields: Dict[str, List[str]]) -> Dict[str, str]:
     }
 
 
+def select_contactless_tac_group(
+    groups: Sequence[Dict[str, object]],
+    kind: str,
+    report_name: str,
+) -> Optional[Dict[str, str]]:
+    candidates = [group for group in groups if group.get("kind") == kind]
+    if not candidates:
+        return None
+    signatures: Dict[Tuple[Tuple[str, str], ...], List[str]] = {}
+    for group in candidates:
+        values = group.get("values")
+        heading = str(group.get("heading", "unnamed TAC table"))
+        if not isinstance(values, dict) or not all(
+            isinstance(tag, str) and isinstance(value, str)
+            for tag, value in values.items()
+        ):
+            raise TseError(f"{heading} has an invalid {report_name} TAC set")
+        signature = tuple(sorted((str(tag), str(value)) for tag, value in values.items()))
+        signatures.setdefault(signature, []).append(heading)
+    if len(signatures) > 1:
+        headings = [
+            heading
+            for duplicate_headings in signatures.values()
+            for heading in duplicate_headings
+        ]
+        raise TseError(
+            f"{report_name} has conflicting {kind} contactless TAC tables: "
+            + ", ".join(headings)
+        )
+    signature = next(iter(signatures))
+    return dict(signature)
+
+
+def encode_contactless_tac_set(values: Dict[str, str]) -> str:
+    order = ("DF8121", "DF8122", "DF8120")
+    missing = [tag for tag in order if tag not in values]
+    if missing:
+        raise TseError("contactless TAC set is missing " + ", ".join(missing))
+    items = [
+        aid_tlv.Tlv(bytes.fromhex(tag), bytes.fromhex(values[tag]), 0)
+        for tag in order
+    ]
+    return aid_tlv.encode_items(items).hex().upper()
+
+
 def profile_prefix(report_name: str) -> str:
     return f"Contactless Interface - {report_name} - "
 
@@ -533,7 +657,8 @@ def build_one(
     fields: Dict[str, List[str]],
     terminal_capabilities: str,
     currency_code: str,
-    currency_exponent: str,
+    currency_exponent: Optional[str],
+    transaction_tac_groups: Sequence[Dict[str, object]] = (),
 ) -> Dict[str, object]:
     base_tlv = profile.get("base_tlv")
     if not isinstance(base_tlv, str) or not base_tlv:
@@ -564,7 +689,10 @@ def build_one(
 
     items = set_top(items, "9F33", terminal_capabilities)
     items = set_top(items, "5F2A", currency_code)
-    items = set_top(items, "5F36", currency_exponent)
+    if currency_exponent is None:
+        items = [item for item in items if item.tag_hex != "5F36"]
+    else:
+        items = set_top(items, "5F36", currency_exponent)
 
     fixed = profile.get("fixed_overrides", {})
     if not isinstance(fixed, dict):
@@ -663,16 +791,34 @@ def build_one(
                 "derived from Mastercard Mag-Stripe mode, CDCVM, and RRP settings",
             )
 
-    contactless_updates: Dict[str, str] = {}
-    for parameter_name, tag_hex in MASTERCARD_CONTACTLESS_TAC_TAGS.items():
-        label = prefix + parameter_name
-        value = get_value(fields, label)
-        if value is not None:
-            contactless_updates[tag_hex] = clean_hex(value, label, 5)
+    contactless_updates = select_contactless_tac_group(
+        transaction_tac_groups, "standard", report_name
+    )
+    refund_updates = select_contactless_tac_group(
+        transaction_tac_groups, "refund", report_name
+    )
+    if transaction_tac_groups and contactless_updates is None:
+        raise TseError(
+            f"{report_name} has transaction-specific contactless TAC tables "
+            "but no standard Purchase TAC table"
+        )
+    if contactless_updates is None:
+        contactless_updates = {}
+        for parameter_name, tag_hex in MASTERCARD_CONTACTLESS_TAC_TAGS.items():
+            label = prefix + parameter_name
+            value = get_value(fields, label)
+            if value is not None:
+                contactless_updates[tag_hex] = clean_hex(value, label, 5)
     if contactless_updates:
         if len(contactless_updates) != 3:
             raise TseError(f"{report_name} contactless TAC set is incomplete")
         items = set_contactless(items, contactless_updates)
+    if refund_updates:
+        refund_tlv = encode_contactless_tac_set(refund_updates)
+        items = set_contactless(items, {"DF840A": refund_tlv})
+        notices.append(
+            "refund contactless TAC encoded under DF8A01 -> DF8407 -> DF840A"
+        )
 
     required = {
         "9F06",
@@ -692,7 +838,6 @@ def build_one(
         "9F1B",
         "9F33",
         "5F2A",
-        "5F36",
         "DF810C",
     }
     if profile.get("scheme") == "mastercard_china":
@@ -718,13 +863,20 @@ def build_one(
     }
 
 
-def analyze(path: Path, catalog: Dict[str, object]) -> Dict[str, object]:
+def analyze(
+    path: Path,
+    catalog: Dict[str, object],
+    currency_code: Optional[str] = None,
+    currency_exponent: Optional[str] = None,
+    require_currency: bool = False,
+) -> Dict[str, object]:
     rows = read_report(path)
     fields = index_rows(rows)
     brands = report_brands(fields)
+    tac_groups = contactless_tac_groups(path, brands)
     terminal_capabilities, cap_notices = resolve_9f33(fields, catalog)
-    currency_code, currency_exponent, currency_notices, currency_defaulted = resolve_currency(
-        fields, catalog
+    resolved_currency, resolved_exponent, currency_notices = resolve_currency(
+        fields, currency_code, currency_exponent, require_currency
     )
     return {
         "report": str(path),
@@ -732,16 +884,39 @@ def analyze(path: Path, catalog: Dict[str, object]) -> Dict[str, object]:
         "deployment_country": get_value(fields, "Deployment country"),
         "brands": brands,
         "terminal_capabilities_9F33": terminal_capabilities,
-        "currency_5F2A": currency_code,
-        "currency_exponent_5F36": currency_exponent,
-        "currency_defaulted": currency_defaulted,
+        "currency_5F2A": resolved_currency,
+        "currency_exponent_5F36": resolved_exponent,
+        "currency_lookup_required": resolved_currency is None,
+        "contactless_tac_tables": {
+            report_name: [
+                {
+                    "heading": group["heading"],
+                    "kind": group["kind"],
+                }
+                for group in groups
+            ]
+            for report_name, groups in tac_groups.items()
+            if groups
+        },
         "notices": cap_notices + currency_notices,
         "_fields": fields,
+        "_contactless_tac_groups": tac_groups,
     }
 
 
-def build_report(path: Path, catalog: Dict[str, object]) -> Dict[str, object]:
-    analysis = analyze(path, catalog)
+def build_report(
+    path: Path,
+    catalog: Dict[str, object],
+    currency_code: Optional[str] = None,
+    currency_exponent: Optional[str] = None,
+) -> Dict[str, object]:
+    analysis = analyze(
+        path,
+        catalog,
+        currency_code=currency_code,
+        currency_exponent=currency_exponent,
+        require_currency=True,
+    )
     profiles = profiles_by_report_name(catalog)
     results: List[Dict[str, object]] = []
     for brand in analysis["brands"]:  # type: ignore[index]
@@ -754,7 +929,8 @@ def build_report(path: Path, catalog: Dict[str, object]) -> Dict[str, object]:
                 analysis["_fields"],  # type: ignore[arg-type,index]
                 str(analysis["terminal_capabilities_9F33"]),
                 str(analysis["currency_5F2A"]),
-                str(analysis["currency_exponent_5F36"]),
+                analysis["currency_exponent_5F36"],  # type: ignore[arg-type]
+                analysis["_contactless_tac_groups"].get(str(brand), []),  # type: ignore[index,union-attr]
             )
         )
     public_analysis = {key: value for key, value in analysis.items() if not key.startswith("_")}
@@ -766,14 +942,36 @@ def print_analysis(result: Dict[str, object]) -> None:
     print(f"Rows: {result['row_count']}")
     print(f"Brands: {', '.join(result['brands'])}")  # type: ignore[arg-type]
     print(f"9F33: {result['terminal_capabilities_9F33']}")
-    print(f"Currency: 5F2A={result['currency_5F2A']} 5F36={result['currency_exponent_5F36']}")
+    currency = result["currency_5F2A"]
+    exponent = result["currency_exponent_5F36"]
+    if currency is None:
+        print("Currency: unresolved; 5F36 omitted")
+    else:
+        exponent_text = str(exponent) if exponent is not None else "omitted"
+        print(f"Currency: 5F2A={currency} 5F36={exponent_text}")
+    tac_tables = result.get("contactless_tac_tables", {})
+    if isinstance(tac_tables, dict):
+        for report_name, groups in tac_tables.items():
+            if isinstance(groups, list):
+                headings = [
+                    str(group.get("heading"))
+                    for group in groups
+                    if isinstance(group, dict)
+                ]
+                if headings:
+                    print(f"{report_name} contactless TAC tables: {', '.join(headings)}")
     for notice in result["notices"]:  # type: ignore[index]
         print(f"NOTICE: {notice}")
 
 
 def command_inspect(args: argparse.Namespace) -> int:
     catalog = load_catalog(Path(args.catalog))
-    result = analyze(Path(args.report), catalog)
+    result = analyze(
+        Path(args.report),
+        catalog,
+        currency_code=args.currency_code,
+        currency_exponent=args.currency_exponent,
+    )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
@@ -783,7 +981,12 @@ def command_inspect(args: argparse.Namespace) -> int:
 
 def command_build(args: argparse.Namespace) -> int:
     catalog = load_catalog(Path(args.catalog))
-    result = build_report(Path(args.report), catalog)
+    result = build_report(
+        Path(args.report),
+        catalog,
+        currency_code=args.currency_code,
+        currency_exponent=args.currency_exponent,
+    )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
@@ -803,7 +1006,12 @@ def command_build(args: argparse.Namespace) -> int:
 
 
 def command_validate(args: argparse.Namespace) -> int:
-    result = build_report(Path(args.report), load_catalog(Path(args.catalog)))
+    result = build_report(
+        Path(args.report),
+        load_catalog(Path(args.catalog)),
+        currency_code=args.currency_code,
+        currency_exponent=args.currency_exponent,
+    )
     print(f"OK: generated and validated {len(result['aids'])} complete AID TLV(s).")
     return 0
 
@@ -822,6 +1030,20 @@ def build_parser() -> argparse.ArgumentParser:
             "--catalog",
             default=str(default_catalog_path()),
             help="AID profile catalog JSON",
+        )
+        child.add_argument(
+            "--currency-code",
+            help=(
+                "authoritatively looked-up ISO 4217 numeric currency code "
+                "(for example 458; encoded as 5F2A=0458)"
+            ),
+        )
+        child.add_argument(
+            "--currency-exponent",
+            help=(
+                "explicit currency exponent for 5F36; omit this option unless "
+                "the user requested 5F36"
+            ),
         )
         if name != "validate":
             child.add_argument("--json", action="store_true")
