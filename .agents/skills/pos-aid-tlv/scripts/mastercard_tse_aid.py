@@ -442,11 +442,7 @@ def resolve_currency(
     ]
 
     exponent: Optional[str] = None
-    if currency_exponent is None:
-        notices.append(
-            "5F36 omitted because the user did not explicitly specify a currency exponent"
-        )
-    else:
+    if currency_exponent is not None:
         exponent_digits = re.sub(r"\s", "", currency_exponent)
         if not re.fullmatch(r"\d{1,2}", exponent_digits):
             raise TseError(
@@ -878,14 +874,13 @@ def analyze(
     resolved_currency, resolved_exponent, currency_notices = resolve_currency(
         fields, currency_code, currency_exponent, require_currency
     )
-    return {
+    result: Dict[str, object] = {
         "report": str(path),
         "row_count": len(rows),
         "deployment_country": get_value(fields, "Deployment country"),
         "brands": brands,
         "terminal_capabilities_9F33": terminal_capabilities,
         "currency_5F2A": resolved_currency,
-        "currency_exponent_5F36": resolved_exponent,
         "currency_lookup_required": resolved_currency is None,
         "contactless_tac_tables": {
             report_name: [
@@ -900,8 +895,12 @@ def analyze(
         },
         "notices": cap_notices + currency_notices,
         "_fields": fields,
+        "_currency_exponent_5F36": resolved_exponent,
         "_contactless_tac_groups": tac_groups,
     }
+    if resolved_exponent is not None:
+        result["currency_exponent_5F36"] = resolved_exponent
+    return result
 
 
 def build_report(
@@ -929,7 +928,7 @@ def build_report(
                 analysis["_fields"],  # type: ignore[arg-type,index]
                 str(analysis["terminal_capabilities_9F33"]),
                 str(analysis["currency_5F2A"]),
-                analysis["currency_exponent_5F36"],  # type: ignore[arg-type]
+                analysis["_currency_exponent_5F36"],  # type: ignore[arg-type]
                 analysis["_contactless_tac_groups"].get(str(brand), []),  # type: ignore[index,union-attr]
             )
         )
@@ -943,12 +942,14 @@ def print_analysis(result: Dict[str, object]) -> None:
     print(f"Brands: {', '.join(result['brands'])}")  # type: ignore[arg-type]
     print(f"9F33: {result['terminal_capabilities_9F33']}")
     currency = result["currency_5F2A"]
-    exponent = result["currency_exponent_5F36"]
     if currency is None:
-        print("Currency: unresolved; 5F36 omitted")
+        print("Currency: unresolved")
     else:
-        exponent_text = str(exponent) if exponent is not None else "omitted"
-        print(f"Currency: 5F2A={currency} 5F36={exponent_text}")
+        exponent = result.get("currency_exponent_5F36")
+        if exponent is None:
+            print(f"Currency: 5F2A={currency}")
+        else:
+            print(f"Currency: 5F2A={currency} 5F36={exponent}")
     tac_tables = result.get("contactless_tac_tables", {})
     if isinstance(tac_tables, dict):
         for report_name, groups in tac_tables.items():
@@ -972,10 +973,13 @@ def command_inspect(args: argparse.Namespace) -> int:
         currency_code=args.currency_code,
         currency_exponent=args.currency_exponent,
     )
+    public_result = {
+        key: value for key, value in result.items() if not key.startswith("_")
+    }
     if args.json:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(json.dumps(public_result, indent=2, ensure_ascii=False))
     else:
-        print_analysis(result)
+        print_analysis(public_result)
     return 0
 
 

@@ -417,7 +417,10 @@ class TseAidTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         result = tse.build_report(path, self.catalog, "458")
         self.assertEqual(result["analysis"]["currency_5F2A"], "0458")
-        self.assertIsNone(result["analysis"]["currency_exponent_5F36"])
+        self.assertNotIn("currency_exponent_5F36", result["analysis"])
+        self.assertFalse(
+            any("5F36" in notice for notice in result["analysis"]["notices"])
+        )
         for profile in result["aids"]:
             values = values_by_tag(profile["tlv"])
             self.assertEqual(values["5F2A"], "0458")
@@ -428,6 +431,19 @@ class TseAidTests(unittest.TestCase):
                 for notice in result["analysis"]["notices"]
             )
         )
+
+    def test_omitted_currency_exponent_is_not_reported(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        result = tse.analyze(path, self.catalog, currency_code="156")
+        public_result = {
+            key: value for key, value in result.items() if not key.startswith("_")
+        }
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            tse.print_analysis(public_result)
+        self.assertNotIn("5F36", stdout.getvalue())
+        self.assertNotIn("currency_exponent_5F36", public_result)
 
     def test_currency_exponent_is_written_only_when_explicit(self) -> None:
         temp, path = self.write_report(ROWS)
