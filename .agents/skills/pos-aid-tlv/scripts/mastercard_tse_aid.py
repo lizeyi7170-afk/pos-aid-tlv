@@ -84,6 +84,13 @@ SDK_CONTACTLESS_DEFAULTS = {
     if definition.get("omit_when_sdk_default")
 }
 
+DF8119_FALLBACK_BY_DF8118 = {
+    df8118.upper(): df8119.upper()
+    for df8118, df8119 in TAG_DEFINITIONS["DF8119"]
+    .get("fallback_by_df8118", {})
+    .items()
+}
+
 MASTERCARD_KERNEL_CONFIGURATION_BITS = {
     name: int(bit_hex, 16)
     for name, bit_hex in TAG_ENCODINGS["mastercard-kernel-configuration"]["bits"].items()
@@ -442,6 +449,36 @@ def set_contactless(
     return aid_tlv.replace_tag(stripped, bytes.fromhex("DF8A01"), other_value, False)
 
 
+def contactless_tag_value(
+    items: Sequence[aid_tlv.Tlv], tag_hex: str
+) -> Optional[str]:
+    grouped: Dict[str, List[aid_tlv.Tlv]] = {}
+    for item in items:
+        grouped.setdefault(item.tag_hex, []).append(item)
+    if len(grouped.get("DF8A01", [])) > 1:
+        raise TseError("profile contains duplicate DF8A01 tags")
+    if "DF8A01" in grouped and ("DF8406" in grouped or "DF8407" in grouped):
+        raise TseError("profile mixes DF8A01 with top-level DF8406/DF8407")
+    if "DF8A01" in grouped:
+        wrappers = aid_tlv.parse_tlv(grouped["DF8A01"][0].value)
+    else:
+        wrappers = grouped.get("DF8407", [])
+    rf_wrappers = [wrapper for wrapper in wrappers if wrapper.tag_hex == "DF8407"]
+    if len(rf_wrappers) > 1:
+        raise TseError("profile contains duplicate DF8407 wrappers")
+    if not rf_wrappers:
+        return None
+    params = aid_tlv.parse_tlv(rf_wrappers[0].value)
+    matches = [
+        item.value.hex().upper()
+        for item in params
+        if item.tag_hex == tag_hex.upper()
+    ]
+    if len(matches) > 1:
+        raise TseError(f"profile contains duplicate contactless tag {tag_hex.upper()}")
+    return matches[0] if matches else None
+
+
 def apply_default_aware_contactless_value(
     items: Sequence[aid_tlv.Tlv],
     tag_hex: str,
@@ -564,6 +601,7 @@ def build_one(
             )
             notices.append("different CDCVM and No-CDCVM limits encoded as DF8125 and DF8124")
 
+    df8118: Optional[str] = None
     cvm_required = get_value(fields, prefix + "CVM supported above CVM Required Limit")
     if cvm_required is not None:
         df8118 = cvm_capability(cvm_required, prefix + "CVM supported above CVM Required Limit")
@@ -594,8 +632,25 @@ def build_one(
             f"derived from No-CVM capabilities: {no_cvm_values[0]}",
         )
     else:
-        items = set_contactless(items, {}, removals=("DF8119",))
-        notices.append("DF8119 omitted; SDK default 08 is used")
+        related_df8119 = DF8119_FALLBACK_BY_DF8118.get(df8118 or "")
+        if related_df8119 is not None:
+            items = apply_default_aware_contactless_value(
+                items,
+                "DF8119",
+                related_df8119,
+                notices,
+                f"derived from DF8118={df8118} because the report omits "
+                "below-limit CVM capability",
+            )
+        else:
+            profile_df8119 = contactless_tag_value(items, "DF8119")
+            if profile_df8119 is not None:
+                notices.append(
+                    f"DF8119={profile_df8119} retained from the confirmed profile "
+                    "because the report omits below-limit CVM capability"
+                )
+            else:
+                notices.append("DF8119 omitted; SDK default 08 is used")
 
     if report_name == "Mastercard":
         df811b = mastercard_kernel_configuration(fields, prefix)
@@ -732,11 +787,13 @@ def command_build(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        print_analysis(result["analysis"])  # type: ignore[arg-type]
         for aid in result["aids"]:  # type: ignore[index]
-            print()
-            print(f"{aid['report_name']} ({aid['aid']})")
             print(aid["tlv"])
+        print()
+        print_analysis(result["analysis"])  # type: ignore[arg-type]
+        for index, aid in enumerate(result["aids"], start=1):  # type: ignore[index]
+            print()
+            print(f"[{index}] {aid['report_name']} ({aid['aid']})")
             print(f"Bytes: {aid['byte_length']}; Kernel: {aid['kernel_id']}")
             for notice in aid["notices"]:
                 print(f"NOTICE: {notice}")

@@ -47,9 +47,16 @@ Online PIN is `20 | 40 = 60`.
 For a Mastercard TSE report:
 
 - Derive `DF8118` from `CVM supported above CVM Required Limit`.
-- Derive `DF8119` only from an explicit below-limit or No-CVM capability field,
-  or from a confirmed certified profile value. Never copy the above-limit field
-  into `DF8119`.
+- Derive `DF8119` first from an explicit below-limit or No-CVM capability
+  field.
+- When that field is absent and `DF8118=40` (Online PIN), derive `DF8119=28`
+  (Signature plus No CVM).
+- For another `DF8118` value, retain a confirmed profile value when available;
+  otherwise use the SDK default.
+
+This is a confirmed above-limit/below-limit capability relation, not a bitwise
+complement operation. `28` differs from the SDK default `08`, so it must be
+emitted.
 
 ## DF811B
 
@@ -100,8 +107,10 @@ When a derived value equals the registry's `sdk_default` and
 `omit_when_sdk_default` is true, omit the Tag from the generated extra
 parameters. Emit the Tag only when its derived value must override the SDK.
 
-When a TSE report has no explicit below-limit CVM capability field, omit
-`DF8119` and rely on SDK default `08`.
+When a TSE report has no explicit below-limit CVM capability field, apply the
+confirmed `DF8118=40` to `DF8119=28` relation first, then retain a confirmed
+`DF8119` from the selected complete profile for any other `DF8118` value. Only
+omit `DF8119` and rely on SDK default `08` when neither rule supplies a value.
 
 ## Adding future Tags
 

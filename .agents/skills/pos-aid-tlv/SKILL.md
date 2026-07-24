@@ -1,6 +1,6 @@
 ---
 name: pos-aid-tlv
-description: Inspect, extract, explain, validate, build, and modify BER-TLV AID and CAPK parameters for RTOS/Linux POS device SDKs and their MfSdkEmvSetAid and MfSdkEmvSetCapk APIs. Use when a user provides an AID parameter screenshot, image, PDF, table, Mastercard TSE/M-TIP L3 HTML report, or certification profile; mentions AID configuration, EMV application parameters, TLV hex, TAC, TTQ, contact/contactless limits, kernel ID, CAPK, CA public keys, RID, public-key index, modulus, exponent, checksum, or expiration date; or asks for C code that adds or updates an AID or CAPK.
+description: Inspect, extract, explain, validate, build, and modify BER-TLV AID and CAPK parameters for RTOS/Linux POS device SDKs and their MfSdkEmvSetAid and MfSdkEmvSetCapk APIs. Use when a user asks which AIDs should be configured; provides an AID parameter screenshot, image, PDF, table, Mastercard TSE/M-TIP L3 HTML report, or certification profile; mentions AID configuration, EMV application parameters, TLV hex, TAC, TTQ, contact/contactless limits, kernel ID, CAPK, CA public keys, RID, public-key index, modulus, exponent, checksum, or expiration date; or asks for C code that adds or updates an AID or CAPK. For AID configuration requests, produce complete validated AID TLVs before explaining individual Tags such as 9F06.
 ---
 
 # POS AID and CAPK TLV
@@ -55,6 +55,14 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 8. Report the target AID, before/after values, final TLV, byte length, validation result, and any SDK-specific caveat.
 
+## AID output contract
+
+1. Treat "which AIDs should I configure?", "what AID configuration is required?", a request to generate AIDs from a TSE/L3 report, or a TSE/L3 report supplied without a narrower question as a request for the complete validated `MfSdkEmvSetAid` TLV for every in-scope AID. Do not interpret "AID" as a request for only Tag `9F06`.
+2. When complete records can be generated, begin the final answer with the AID TLVs. Put each complete uppercase TLV on exactly one continuous line in its own fenced `text` code block. Do not insert spaces, line breaks, separators, comments, Tag labels, or ellipses inside a TLV.
+3. After all requested TLVs, explain their order and report brand, `9F06`, `DF810C`, byte length, derived/defaulted values, validation result, and necessary SDK caveats. Do not lead with a brand/`9F06` table and do not ask whether the user wants the complete TLVs.
+4. If the user explicitly requests only one brand, output only that brand's complete TLV. If a complete record cannot be generated safely, explain the exact blocker instead of returning a partial TLV or presenting a `9F06` list as the configuration result.
+5. Provide C arrays or `MfSdkEmvSetAid` calls only when requested; the default deliverable is the complete TLV.
+
 ## Mastercard TSE/M-TIP L3 report workflow
 
 1. Read `references/mastercard-tse-aid.md`, `references/mastercard-contactless-tags.md`, `references/aid-tag-registry.json`, `references/aid-profile-catalog.json`, and `references/sdk-aid-reference.md`.
@@ -76,7 +84,8 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
    python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>"
    ```
 
-9. Do not add the original report to the skill or repository because it can contain personal and acquirer information. Use sanitized HTML snippets for tests.
+9. Follow the AID output contract. Emit every complete generated TLV before report analysis or Tag explanations; a list of brands, `9F06` values, or kernel IDs is supplemental context, not the requested configuration.
+10. Do not add the original report to the skill or repository because it can contain personal and acquirer information. Use sanitized HTML snippets for tests.
 
 ## CAPK workflow
 
@@ -160,6 +169,7 @@ When extending `capk-catalog.json`, preserve all existing sources and records. A
 - For a newly built AID, default any missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`. Explicitly report that these defaults were applied because the source did not specify the limits.
 - For a Mastercard TSE/M-TIP report, use the report's exact limits instead of the generic new-AID defaults. Left-pad decimal contactless amounts to 12 digits before packed-BCD encoding.
 - Keep TSE base profiles in `references/aid-profile-catalog.json`. Do not generate a listed brand whose complete base TLV is absent.
+- Never answer an AID-configuration or TSE-report request with only brand names, `9F06`, or `DF810C`. Return complete validated AID TLVs first whenever they can be generated safely.
 - Treat TSE `9F33` question marks as constrained mask bits, not hexadecimal input. Apply only the documented byte-specific substitutions and report them.
 - Resolve TSE currency by deployment country. When no mapping exists, default to `5F2A=0840` and `5F36=02` and explicitly require the user to verify the actual currency.
 - Do not use `MfSdkEmvGetAid` as a lossless backup of other parameters; it does not return the stored `DF8A01`/`DF8406`/`DF8407` content.

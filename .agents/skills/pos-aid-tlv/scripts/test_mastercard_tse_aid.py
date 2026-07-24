@@ -152,6 +152,7 @@ class TseAidTests(unittest.TestCase):
         contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
         nested = values_by_tag(contactless.value.hex())
         self.assertEqual(nested["DF8118"], "40")
+        self.assertEqual(nested["DF8119"], "28")
 
     def test_sdk_default_kernel_configuration_is_omitted(self) -> None:
         rows = [
@@ -207,6 +208,7 @@ class TseAidTests(unittest.TestCase):
             },
         )
         self.assertEqual(tse.CVM_CAPABILITY_BITS["online pin"], 0x40)
+        self.assertEqual(tags["DF8119"]["fallback_by_df8118"], {"40": "28"})
         self.assertEqual(
             tse.MASTERCARD_KERNEL_CONFIGURATION_BITS["rrp_supported"],
             0x10,
@@ -292,6 +294,25 @@ class TseAidTests(unittest.TestCase):
         self.assertTrue(result["currency_defaulted"])
         self.assertTrue(any("0840" in notice for notice in result["notices"]))
 
+    def test_build_command_prints_complete_tlvs_before_analysis(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        expected = tse.build_report(path, self.catalog)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            tse.command_build(
+                argparse.Namespace(
+                    report=str(path),
+                    catalog=str(tse.default_catalog_path()),
+                    json=False,
+                )
+            )
+        lines = stdout.getvalue().splitlines()
+        expected_tlvs = [item["tlv"] for item in expected["aids"]]
+        self.assertEqual(lines[: len(expected_tlvs)], expected_tlvs)
+        self.assertTrue(all(line and line == line.upper() for line in expected_tlvs))
+        self.assertGreater(lines.index(f"Report: {path}"), len(expected_tlvs))
+
     def test_builds_maestro_with_mastercard_rules_and_maestro_values(self) -> None:
         rows = [
             (
@@ -335,7 +356,7 @@ class TseAidTests(unittest.TestCase):
             item for item in result["aids"] if item["scheme"] == "maestro"
         )
         maestro = values_by_tag(maestro_profile["tlv"])
-        self.assertEqual(maestro_profile["byte_length"], 178)
+        self.assertEqual(maestro_profile["byte_length"], 183)
         self.assertEqual(maestro["9F06"], "A0000000043060")
         self.assertEqual(maestro["DF810C"], "02")
         self.assertEqual(maestro["9F1D"], "4C00800000000000")
@@ -349,8 +370,54 @@ class TseAidTests(unittest.TestCase):
         self.assertEqual(nested["DF8121"], "0000800000")
         self.assertEqual(nested["DF8122"], "F45004800C")
         self.assertEqual(nested["DF8118"], "40")
-        self.assertNotIn("DF8119", nested)
+        self.assertEqual(nested["DF8119"], "28")
         self.assertEqual(nested["DF811B"], "B0")
+        self.assertTrue(
+            any(
+                "DF8119=28 overrides SDK default 08" in notice
+                for notice in maestro_profile["notices"]
+            )
+        )
+
+    def test_explicit_maestro_below_limit_cvm_overrides_profile(self) -> None:
+        rows = [
+            (
+                label,
+                "Mastercard China AID, Maestro, Mastercard"
+                if label.endswith("Brands (AID) supported")
+                else value,
+            )
+            for label, value in ROWS
+        ]
+        rows.extend(
+            [
+                (
+                    "Contactless Interface - Maestro - CVM supported above CVM Required Limit",
+                    "Online PIN",
+                ),
+                (
+                    "Contactless Interface - Maestro - CVM supported when No CVM Required",
+                    "No CVM required",
+                ),
+            ]
+        )
+        temp, path = self.write_report(rows)
+        self.addCleanup(temp.cleanup)
+        result = tse.build_report(path, self.catalog)
+        maestro_profile = next(
+            item for item in result["aids"] if item["scheme"] == "maestro"
+        )
+        maestro = values_by_tag(maestro_profile["tlv"])
+        wrappers = aid_tlv.parse_tlv(bytes.fromhex(maestro["DF8A01"]))
+        contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
+        nested = values_by_tag(contactless.value.hex())
+        self.assertNotIn("DF8119", nested)
+        self.assertTrue(
+            any(
+                "DF8119=08 matches the SDK default" in notice
+                for notice in maestro_profile["notices"]
+            )
+        )
 
     def test_new_aid_build_defaults_df01_to_partial_matching(self) -> None:
         stdout = io.StringIO()
