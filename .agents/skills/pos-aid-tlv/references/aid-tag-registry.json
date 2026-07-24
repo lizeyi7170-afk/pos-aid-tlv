@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "description": "Machine-readable AID tag facts used by the RTOS/Linux POS SDK tooling. Detailed Mastercard interpretation is in mastercard-contactless-tags.md.",
+  "tags": {
+    "DF8118": {
+      "name": "CVM Capability - CVM Required",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 1,
+      "value_format": "bitmap",
+      "encoding": "mastercard-cvm-capability",
+      "sdk_default": "60",
+      "omit_when_sdk_default": true,
+      "source_field": "CVM supported above CVM Required Limit"
+    },
+    "DF8119": {
+      "name": "CVM Capability - No CVM Required",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 1,
+      "value_format": "bitmap",
+      "encoding": "mastercard-cvm-capability",
+      "sdk_default": "08",
+      "omit_when_sdk_default": true,
+      "source_field": "Explicit below-limit or No-CVM capability field"
+    },
+    "DF811B": {
+      "name": "Kernel Configuration",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 1,
+      "value_format": "bitmap",
+      "encoding": "mastercard-kernel-configuration",
+      "sdk_default": "20",
+      "omit_when_sdk_default": true
+    },
+    "DF840A": {
+      "name": "Contactless Refund Configuration",
+      "scheme": "all",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "min_length_bytes": 0,
+      "max_length_bytes": 256,
+      "value_format": "tlv-stream",
+      "nested": true,
+      "transaction_type": "20",
+      "source_field": "Contactless refund parameter TLV stream"
+    },
+    "DF8120": {
+      "name": "Terminal Action Code - Default",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 5,
+      "value_format": "binary",
+      "report_group": "mastercard-contactless-tac",
+      "source_field": "TAC Default"
+    },
+    "DF8121": {
+      "name": "Terminal Action Code - Denial",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 5,
+      "value_format": "binary",
+      "report_group": "mastercard-contactless-tac",
+      "source_field": "TAC Denial"
+    },
+    "DF8122": {
+      "name": "Terminal Action Code - Online",
+      "scheme": "mastercard",
+      "scope": "contactless-extra",
+      "path": [
+        "DF8A01",
+        "DF8407"
+      ],
+      "length_bytes": 5,
+      "value_format": "binary",
+      "report_group": "mastercard-contactless-tac",
+      "source_field": "TAC Online"
+    }
+  },
+  "encodings": {
+    "mastercard-cvm-capability": {
+      "bits": {
+        "80": [
+          "Plaintext PIN for ICC verification",
+          "Offline plaintext PIN"
+        ],
+        "40": [
+          "Online PIN",
+          "Enciphered PIN for online verification"
+        ],
+        "20": [
+          "Signature",
+          "Signature (paper)"
+        ],
+        "10": [
+          "Offline PIN",
+          "Offline enciphered PIN",
+          "Enciphered PIN for offline verification"
+        ],
+        "08": [
+          "No CVM",
+          "No CVM required"
+        ]
+      }
+    },
+    "mastercard-kernel-configuration": {
+      "bits": {
+        "magstripe_not_supported": "80",
+        "emv_not_supported": "40",
+        "cdcvm_supported": "20",
+        "rrp_supported": "10",
+        "payment_system_reserved": "08",
+        "read_all_records_without_cda": "04"
+      }
+    }
+  },
+  "sources": [
+    {
+      "id": "sdk-paypass-defaults",
+      "description": "Current SDK defaults in src/emvapi/paypass_cofig.c, confirmed by the user on 2026-07-24."
+    },
+    {
+      "id": "mastercard-kernel-tag-definitions",
+      "description": "User-provided Mastercard tag definition excerpts and TSE interpretation rules, 2026-07-24."
+    },
+    {
+      "id": "sdk-contactless-refund-config",
+      "description": "DF840A handling in SaveEmvAidOtherParamListData_ex and DEF_TAG_CONTACTLESS_REFUN_CONFIG, confirmed by the user on 2026-07-24."
+    }
+  ]
+}

@@ -30,6 +30,43 @@ class TlvError(ValueError):
     pass
 
 
+def default_aid_tag_registry_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "references" / "aid-tag-registry.json"
+
+
+def load_contactless_parameter_specs() -> Dict[str, Dict[str, object]]:
+    path = default_aid_tag_registry_path()
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TlvError(f"cannot load AID tag registry {path}: {exc}") from exc
+    if not isinstance(registry, dict) or registry.get("schema_version") != 1:
+        raise TlvError("AID tag registry must be an object with schema_version=1")
+    definitions = registry.get("tags")
+    if not isinstance(definitions, dict):
+        raise TlvError("AID tag registry is missing the tags object")
+
+    result: Dict[str, Dict[str, object]] = {}
+    for tag_hex, definition in definitions.items():
+        if not isinstance(definition, dict):
+            raise TlvError(f"AID tag registry definition for {tag_hex} must be an object")
+        if definition.get("path") != ["DF8A01", "DF8407"]:
+            continue
+        spec: Dict[str, object] = {
+            "name": definition.get("name", "Contactless extra parameter")
+        }
+        if "length_bytes" in definition:
+            spec["length"] = definition["length_bytes"]
+        if "min_length_bytes" in definition:
+            spec["min"] = definition["min_length_bytes"]
+        if "max_length_bytes" in definition:
+            spec["max"] = definition["max_length_bytes"]
+        if definition.get("nested"):
+            spec["nested"] = True
+        result[tag_hex] = spec
+    return result
+
+
 SPECS: Dict[str, Dict[str, object]] = {
     "9F06": {"name": "Terminal AID", "min": 5, "max": 16},
     "DF01": {"name": "Application selection indicator", "length": 1},
@@ -62,7 +99,10 @@ SPECS: Dict[str, Dict[str, object]] = {
     "DF8407": {"name": "Contactless other-parameter TLV", "min": 0, "max": 250, "nested": True},
 }
 
-NESTED_TAGS = {tag for tag, spec in SPECS.items() if spec.get("nested")}
+CONTACTLESS_PARAMETER_SPECS = load_contactless_parameter_specs()
+DISPLAY_SPECS = dict(SPECS)
+DISPLAY_SPECS.update(CONTACTLESS_PARAMETER_SPECS)
+NESTED_TAGS = {tag for tag, spec in DISPLAY_SPECS.items() if spec.get("nested")}
 BCD_TAGS = {tag for tag, spec in SPECS.items() if spec.get("bcd")}
 KERNEL_IDS = {0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09}
 OTHER_WRAPPERS = {"contact": "DF8406", "contactless": "DF8407"}
@@ -71,6 +111,7 @@ DEFAULT_AID_LIMITS = {
     "DF20": bytes.fromhex("999999999999"),
     "DF21": bytes.fromhex("000000000000"),
 }
+DEFAULT_AID_SELECTION = bytes.fromhex("00")
 
 
 def read_text_arg(raw: str) -> str:
@@ -204,6 +245,47 @@ def validate_dol(value: bytes) -> Optional[str]:
     return None
 
 
+def validate_contactless_parameters(
+    parameters: Sequence[Tlv], context: str, errors: List[str]
+) -> None:
+    grouped: Dict[str, List[Tlv]] = {}
+    for parameter in parameters:
+        grouped.setdefault(parameter.tag_hex, []).append(parameter)
+    if len(grouped.get("DF840A", [])) > 1:
+        errors.append(f"{context} contains duplicate contactless refund container DF840A")
+
+    for parameter in parameters:
+        spec = CONTACTLESS_PARAMETER_SPECS.get(parameter.tag_hex)
+        if spec is None:
+            continue
+        length = len(parameter.value)
+        if "length" in spec and length != spec["length"]:
+            errors.append(
+                f"{context} tag {parameter.tag_hex} ({spec['name']}) must be "
+                f"{spec['length']} bytes, got {length}"
+            )
+        if "min" in spec and length < spec["min"]:
+            errors.append(
+                f"{context} tag {parameter.tag_hex} ({spec['name']}) must be at "
+                f"least {spec['min']} bytes, got {length}"
+            )
+        if "max" in spec and length > spec["max"]:
+            errors.append(
+                f"{context} tag {parameter.tag_hex} ({spec['name']}) must be at "
+                f"most {spec['max']} bytes, got {length}"
+            )
+        if spec.get("nested") and parameter.value:
+            try:
+                nested_parameters = parse_tlv(parameter.value)
+                validate_contactless_parameters(
+                    nested_parameters, f"{context} -> {parameter.tag_hex}", errors
+                )
+            except TlvError as exc:
+                errors.append(
+                    f"{context} tag {parameter.tag_hex} contains malformed nested TLV: {exc}"
+                )
+
+
 def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
     errors: List[str] = []
     warnings: List[str] = []
@@ -234,6 +316,10 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
         if tag in NESTED_TAGS and item.value:
             try:
                 children = parse_tlv(item.value)
+                if tag == "DF8407":
+                    validate_contactless_parameters(
+                        children, "top-level DF8407", errors
+                    )
                 if tag == "DF8A01":
                     child_tags = [child.tag_hex for child in children]
                     for wrapper in ("DF8406", "DF8407"):
@@ -242,7 +328,11 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
                     for child in children:
                         if child.tag_hex in {"DF8406", "DF8407"} and child.value:
                             try:
-                                parse_tlv(child.value)
+                                parameters = parse_tlv(child.value)
+                                if child.tag_hex == "DF8407":
+                                    validate_contactless_parameters(
+                                        parameters, "DF8A01 -> DF8407", errors
+                                    )
                             except TlvError as exc:
                                 errors.append(
                                     f"tag DF8A01 child {child.tag_hex} contains malformed nested TLV: {exc}"
@@ -268,7 +358,10 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
 
     if "DF01" in grouped and len(grouped["DF01"][0].value) == 1:
         if grouped["DF01"][0].value[0] not in (0, 1):
-            warnings.append("DF01 is normally 00 (exact match) or 01 (partial match); verify this profile")
+            warnings.append(
+                "DF01 project convention uses 00 for partial matching; "
+                "verify any other profile-specific value"
+            )
     if "DF810C" in grouped and len(grouped["DF810C"][0].value) == 1:
         if grouped["DF810C"][0].value[0] not in KERNEL_IDS:
             errors.append("DF810C kernel ID is not one of 02, 03, 04, 05, 06, 07, or 09")
@@ -281,7 +374,7 @@ def validate_items(items: Sequence[Tlv]) -> Tuple[List[str], List[str]]:
 
 
 def item_dict(item: Tlv, include_children: bool = True) -> Dict[str, object]:
-    spec = SPECS.get(item.tag_hex, {})
+    spec = DISPLAY_SPECS.get(item.tag_hex, {})
     result: Dict[str, object] = {
         "offset": item.offset,
         "tag": item.tag_hex,
@@ -312,7 +405,7 @@ def print_nested_items(items: Sequence[Tlv], indent: str) -> None:
 def print_items(items: Sequence[Tlv], indent: str = "") -> None:
     print(f"{indent}{'OFFSET':>6}  {'TAG':<8} {'LEN':>4}  {'VALUE':<30} NAME")
     for item in items:
-        spec = SPECS.get(item.tag_hex, {})
+        spec = DISPLAY_SPECS.get(item.tag_hex, {})
         value = item.value.hex().upper()
         shown = value if len(value) <= 30 else value[:27] + "..."
         print(f"{indent}{item.offset:6d}  {item.tag_hex:<8} {len(item.value):4d}  {shown:<30} {spec.get('name', 'SDK-unmapped')}")
@@ -497,6 +590,16 @@ def command_build(args: argparse.Namespace) -> int:
         items.append(item)
         offset += len(item.encoded())
     present_tags = {item.tag_hex for item in items}
+    if "DF01" not in present_tags:
+        item = Tlv(tag=bytes.fromhex("DF01"), value=DEFAULT_AID_SELECTION, offset=offset)
+        items.append(item)
+        offset += len(item.encoded())
+        present_tags.add("DF01")
+        print(
+            "NOTICE: DF01 was not specified; applied project default DF01=00 "
+            "(partial application matching)",
+            file=sys.stderr,
+        )
     applied_defaults: List[str] = []
     for tag_hex, value in DEFAULT_AID_LIMITS.items():
         if tag_hex in present_tags:
@@ -588,7 +691,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     build = sub.add_parser(
         "build",
-        help="build from TAG=VALUE pairs and default missing DF19/DF20/DF21 limits",
+        help="build from TAG=VALUE pairs and default missing DF01/DF19/DF20/DF21",
     )
     build.add_argument("pairs", nargs="+")
     build.set_defaults(func=command_build)

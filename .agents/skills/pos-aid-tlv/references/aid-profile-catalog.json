@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "description": "RTOS/Linux SDK AID base profiles used as complete-record inputs before Mastercard TSE report overrides.",
+  "unknown_currency_default": {
+    "code": "0840",
+    "exponent": "02",
+    "notice": "The deployment country did not resolve to a known currency profile, so 5F2A=0840 and 5F36=02 were applied. Confirm the actual transaction currency before deployment."
+  },
+  "country_currency": [
+    {
+      "names": [
+        "China",
+        "PRC",
+        "People's Republic of China"
+      ],
+      "code": "0156",
+      "exponent": "02"
+    },
+    {
+      "names": [
+        "United States",
+        "United States of America",
+        "USA",
+        "US"
+      ],
+      "code": "0840",
+      "exponent": "02"
+    }
+  ],
+  "tse_policy": {
+    "9f33_unknown_bit_defaults": {
+      "1": "1",
+      "3": "0"
+    }
+  },
+  "profiles": [
+    {
+      "id": "mastercard-mtip-mcl-3.1.4",
+      "scheme": "mastercard",
+      "report_name": "Mastercard",
+      "aid": "A0000000041010",
+      "kernel_id": "02",
+      "environment": "certification",
+      "status": "user-provided",
+      "source": "User-provided Mastercard template, 2026-07-23; DF11/DF12 normalized to the SDK mapping and redundant DF8118=60 removed with user confirmation on 2026-07-24",
+      "base_tlv": "DF810C01029F0607A0000000041010DF0101009F09020002DF1105FE50BCA000DF1205FE50BCF800DF130500000000009F1B0400000000DF1504100000009F1D086C01800000000000DF160101DF170101DF14039F3704DF180101DF1906000000000000DF2006000000100000DF2106000000030000DF8A0124DF840720DF8121050000000000DF812005F45084800CDF812205F45084800CDF811B01B0",
+      "fixed_overrides": {
+        "9F1D": "6C00800000000000"
+      }
+    },
+    {
+      "id": "mastercard-china-mtip",
+      "scheme": "mastercard_china",
+      "report_name": "Mastercard China AID",
+      "aid": "A0000000108888",
+      "kernel_id": "07",
+      "environment": "certification",
+      "status": "user-provided",
+      "source": "User-provided Mastercard China template, 2026-07-23; DF11/DF12 normalized to the SDK mapping with user confirmation on 2026-07-24",
+      "base_tlv": "9F0607A0000000108888DF0101009F09020002DF1105FE50BCA000DF1205FE50BCF800DF130500000000009F1B0400000000DF150410000000DF160101DF170101DF14039F3704DF180101DF1906000000000000DF2006000000100000DF2106000000030000DF810C0107",
+      "fixed_overrides": {
+        "9F66": "3600C080"
+      }
+    },
+    {
+      "id": "maestro-mtip",
+      "scheme": "maestro",
+      "report_name": "Maestro",
+      "aid": "A0000000043060",
+      "kernel_id": "02",
+      "environment": "certification",
+      "status": "template-required",
+      "source": "A certified complete Maestro base template has not been supplied.",
+      "base_tlv": null,
+      "fixed_overrides": {}
+    }
+  ]
+}

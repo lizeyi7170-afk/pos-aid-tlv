@@ -33,7 +33,7 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 | Tag | Length | SDK field | Meaning / notes |
 |---|---:|---|---|
 | `9F06` | 5–16 | `szAID_b_9F06` | Terminal AID. Required by this skill for every add/update. |
-| `DF01` | 1 | `cASI_b_DF01` | Application selection indicator; normally `00` exact match or `01` partial match. |
+| `DF01` | 1 | `cASI_b_DF01` | Application selection indicator. Project convention uses `00` for partial matching, and `00` is the normal default for a new AID when the source omits this field. |
 | `9F09` | 2 | `szAppVer_b_9F09` | Terminal application version. Preferred tag. |
 | `9F08` | 2 | same as `9F09` | Accepted alias; if both occur, `9F08` overwrites `9F09`. Do not include both. |
 | `DF11` | 5 | `szTACDefault_b_DF11` | TAC Default. |
@@ -64,7 +64,7 @@ Lengths are bytes. Fixed-length fields are silently truncated by the current imp
 
 Notably, tag `87` (priority) and `cAidFileType` exist in other SDK structures but are not mapped by `MfSdkEmvSetAid`; supplying them at the top level has no effect through this API.
 
-`9F66` and `DF810C` may be omitted when the source profile does not require them. For a newly generated AID, default missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`, and disclose that these values were supplied by the skill rather than the source profile.
+`9F66` and `DF810C` may be omitted when the source profile does not require them. For a newly generated AID, default a missing application selection indicator to `DF01=00` for partial matching. Default missing contactless limits to `DF19=000000000000`, `DF20=999999999999`, and `DF21=000000000000`. Disclose every value supplied by the skill rather than the source profile.
 
 ## Other-parameter containers
 
@@ -74,6 +74,7 @@ Use the complete representation by default:
 DF8A01 <length>
   DF8406 <length> <contact parameter TLVs>
   DF8407 <length> <contactless parameter TLVs>
+    DF840A <length> <contactless refund parameter TLVs>
 ```
 
 `MfSdkEmvSetAid` also accepts `DF8406` and `DF8407` directly at the top level when `DF8A01` is absent. That is a shorthand: the SDK extracts their values, reconstructs the wrapper TLVs, and stores the resulting complete other-parameter stream. Prefer `DF8A01` when generating new data because it represents the stored hierarchy explicitly and is less dependent on this SDK convenience path.
@@ -109,6 +110,43 @@ encoded:      DF8A010BDF840707DF880303730000
 ```
 
 This is only an encoding example. Scheme values must come from the applicable certified profile.
+
+### Contactless refund parameters
+
+Use `DF840A` as a nested container for the parameter stream that applies to a
+contactless refund:
+
+```text
+DF8A01
+  DF8407
+    <normal contactless parameter TLVs>
+    DF840A
+      <contactless refund parameter TLVs>
+```
+
+`SaveEmvAidOtherParamListData_ex` removes `DF840A` from the normal contactless
+parameter list and, when transaction type is `0x20`, loads the TLV stream in its
+value as the refund configuration. Consequently:
+
+- Put `DF840A` inside `DF8407`, normally under top-level `DF8A01`.
+- Encode the value of `DF840A` as a complete BER-TLV stream, not as an opaque
+  flag or a single transaction-type byte.
+- Keep ordinary `DF8407` children as the normal contactless configuration.
+- Do not put `DF840A` at the AID top level, where `MfSdkEmvSetAid` does not map
+  it.
+- Respect the enclosing `DF8407` and `DF8A01` size limits even though the
+  refund handler's local buffer accepts up to 256 value bytes.
+
+Use `set-auto` or `set-other ... contactless` with Tag `DF840A`; both produce
+the required `DF8A01 -> DF8407 -> DF840A` placement. Validate the completed AID
+so the nested refund value is checked as TLV.
+
+### Mastercard contactless parameters
+
+Read `mastercard-contactless-tags.md` for the interpretation of Mastercard
+contactless TAC, CVM capability, and Kernel Configuration. Use
+`aid-tag-registry.json` as the machine-readable source for their placement,
+length, encoding, report-field mapping, and SDK-default omission.
 
 ## Important implementation behavior
 
