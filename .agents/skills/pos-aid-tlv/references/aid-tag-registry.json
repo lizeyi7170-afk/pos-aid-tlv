@@ -30,7 +30,10 @@
       "encoding": "mastercard-cvm-capability",
       "sdk_default": "08",
       "omit_when_sdk_default": true,
-      "source_field": "Explicit below-limit or No-CVM capability field"
+      "source_field": "Explicit below-limit or No-CVM capability field, otherwise a confirmed DF8118 relation or profile value",
+      "fallback_by_df8118": {
+        "40": "28"
+      }
     },
     "DF811B": {
       "name": "Kernel Configuration",
@@ -145,7 +148,7 @@
     },
     {
       "id": "mastercard-kernel-tag-definitions",
-      "description": "User-provided Mastercard tag definition excerpts and TSE interpretation rules, 2026-07-24."
+      "description": "User-provided Mastercard tag definition excerpts and TSE interpretation rules, including confirmed Maestro DF8118=40 / DF8119=28 behavior, 2026-07-24."
     },
     {
       "id": "sdk-contactless-refund-config",

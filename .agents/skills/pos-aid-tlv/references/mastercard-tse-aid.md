@@ -7,6 +7,7 @@
 - SDK tag mapping
 - Amount, mask, and currency conversions
 - Profile requirements
+- Answer contract
 - Validation and reporting
 
 ## Scope and source precedence
@@ -26,7 +27,9 @@ Maestro uses the complete catalog profile with `9F06=A0000000043060`,
 `DF810C=02`, and fixed `9F1D=4C00800000000000`. Apply the same
 Mastercard tag placement, conversion, default-omission, and nesting rules, but
 take TAC, limits, CVM, and other scheme-scoped values from the Maestro rows in
-the current report whenever they are present.
+the current report whenever they are present. When the report has
+`DF8118=40` from Online PIN above the CVM limit but omits the below-limit
+capability, derive and emit `DF8119=28` for Signature plus No CVM.
 
 ## Report extraction
 
@@ -119,6 +122,20 @@ Current catalog status:
 - Mastercard `A0000000041010`, kernel `02`: complete user-provided base profile.
 - Mastercard China `A0000000108888`, kernel `07`: complete user-provided base profile.
 - Maestro `A0000000043060`, kernel `02`: complete user-confirmed base profile using Mastercard mapping and nesting rules, Maestro-scoped report values, and fixed `9F1D=4C00800000000000`.
+
+## Answer contract
+
+Treat a request asking which AIDs should be configured, a request to generate
+AIDs from a TSE report, or a supplied TSE report without a narrower question as
+a request for every complete in-scope AID TLV. Do not stop after identifying
+brands, `9F06`, or `DF810C`, and do not ask whether the user also wants the
+complete records.
+
+Put the complete validated TLVs first. Each TLV must be uppercase and contiguous
+on one line in its own fenced `text` block. After all TLVs, map their order to
+the report brands and give `9F06`, kernel, byte length, derivations, defaults,
+validation results, and SDK caveats. If a complete profile is unavailable,
+state the blocker instead of returning a partial TLV.
 
 ## Validation and reporting
 

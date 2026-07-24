@@ -1,4 +1,4 @@
 interface:
   display_name: "POS AID and CAPK TLV"
   short_description: "Build POS AID/CAPK TLVs from reports and profiles"
-  default_prompt: "Use $pos-aid-tlv to extract an AID or CAPK profile from a table, image, or Mastercard L3 report and produce a validated RTOS/Linux POS SDK TLV."
+  default_prompt: "Use $pos-aid-tlv to build complete validated RTOS/Linux POS AID or CAPK TLVs from a report or profile, placing every complete TLV before parameter explanations."
