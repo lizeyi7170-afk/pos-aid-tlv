@@ -61,6 +61,15 @@ def html_for(rows: List[Tuple[str, str]]) -> str:
     return f"<html><body><table>{body}</table></body></html>"
 
 
+def tac_table(heading: str, rows: List[Tuple[str, str]]) -> str:
+    body = "".join(f"<tr><td>{label}</td><td>{value}</td></tr>" for label, value in rows)
+    return (
+        "<table>"
+        f"<tr><th>{heading}</th><th>Values (Hexadecimal)</th></tr>"
+        f"{body}</table>"
+    )
+
+
 def values_by_tag(tlv_hex: str) -> Dict[str, str]:
     return {
         item.tag_hex: item.value.hex().upper()
@@ -80,10 +89,16 @@ class TseAidTests(unittest.TestCase):
         path.write_text(html_for(rows), encoding="utf-8")
         return temp, path
 
+    def write_html(self, html: str) -> Tuple[tempfile.TemporaryDirectory, Path]:
+        temp = tempfile.TemporaryDirectory()
+        path = Path(temp.name) / "report.html"
+        path.write_text(html, encoding="utf-8")
+        return temp, path
+
     def test_builds_mastercard_and_china_profiles(self) -> None:
         temp, path = self.write_report(ROWS)
         self.addCleanup(temp.cleanup)
-        result = tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog, "156")
         self.assertEqual(result["analysis"]["terminal_capabilities_9F33"], "E0F8C8")
         self.assertEqual(result["analysis"]["currency_5F2A"], "0156")
         self.assertEqual(len(result["aids"]), 2)
@@ -99,6 +114,7 @@ class TseAidTests(unittest.TestCase):
         self.assertEqual(china["9F33"], "E0F8C8")
         self.assertEqual(china["9F66"], "3600C080")
         self.assertEqual(china["5F2A"], "0156")
+        self.assertNotIn("5F36", china)
         self.assertNotIn("DF8A01", china)
         self.assertTrue(
             any(
@@ -114,6 +130,7 @@ class TseAidTests(unittest.TestCase):
         self.assertEqual(mastercard["DF19"], "000000000000")
         self.assertEqual(mastercard["DF20"], "000000100000")
         self.assertEqual(mastercard["DF21"], "000000030000")
+        self.assertNotIn("5F36", mastercard)
         wrappers = aid_tlv.parse_tlv(bytes.fromhex(mastercard["DF8A01"]))
         contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
         nested = values_by_tag(contactless.value.hex())
@@ -143,7 +160,7 @@ class TseAidTests(unittest.TestCase):
         ]
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
-        result = tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog, "156")
         mastercard = next(
             item for item in result["aids"] if item["scheme"] == "mastercard"
         )
@@ -170,7 +187,7 @@ class TseAidTests(unittest.TestCase):
         ]
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
-        result = tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog, "156")
         mastercard = next(
             item for item in result["aids"] if item["scheme"] == "mastercard"
         )
@@ -215,6 +232,7 @@ class TseAidTests(unittest.TestCase):
         )
         self.assertEqual(tags["DF840A"]["path"], ["DF8A01", "DF8407"])
         self.assertEqual(tags["DF840A"]["transaction_type"], "20")
+        self.assertEqual(tags["DF840A"]["report_table_heading_keyword"], "Refund")
         self.assertTrue(tags["DF840A"]["nested"])
 
     def test_contactless_refund_configuration_is_nested_and_validated(self) -> None:
@@ -243,6 +261,90 @@ class TseAidTests(unittest.TestCase):
         )
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
+
+    def test_tse_refund_tac_table_is_nested_under_df840a(self) -> None:
+        contactless_tac_labels = {
+            "Contactless Interface - Mastercard - TAC Denial",
+            "Contactless Interface - Mastercard - TAC Online",
+            "Contactless Interface - Mastercard - TAC Default",
+        }
+        base_rows = [
+            (
+                label,
+                "Mastercard"
+                if label.endswith("Brands (AID) supported")
+                else value,
+            )
+            for label, value in ROWS
+            if label not in contactless_tac_labels
+            and not label.startswith("Contactless Interface - Mastercard China AID - ")
+        ]
+        purchase_rows = [
+            ("Contactless Interface - Mastercard - TAC Denial", "00 00 00 00 00"),
+            ("Contactless Interface - Mastercard - TAC Online", "F4 50 84 80 0C"),
+            ("Contactless Interface - Mastercard - TAC Default", "F4 50 84 80 0C"),
+        ]
+        refund_rows = [
+            ("Contactless Interface - Mastercard - TAC Denial", "FF FF FF FF FF"),
+            ("Contactless Interface - Mastercard - TAC Online", "00 00 00 00 00"),
+            ("Contactless Interface - Mastercard - TAC Default", "00 00 00 00 00"),
+        ]
+        html = html_for(base_rows).replace(
+            "</body></html>",
+            tac_table("Terminal Action Codes - Purchase Transaction", purchase_rows)
+            + tac_table(
+                "Terminal Action Codes - PAN Retrieval Transaction (Refund)",
+                refund_rows,
+            )
+            + "</body></html>",
+        )
+        temp, path = self.write_html(html)
+        self.addCleanup(temp.cleanup)
+        result = tse.build_report(path, self.catalog, "156")
+        self.assertEqual(
+            [
+                group["kind"]
+                for group in result["analysis"]["contactless_tac_tables"]["Mastercard"]
+            ],
+            ["standard", "refund"],
+        )
+        mastercard_profile = result["aids"][0]
+        self.assertEqual(mastercard_profile["byte_length"], 200)
+        mastercard = values_by_tag(mastercard_profile["tlv"])
+        wrappers = aid_tlv.parse_tlv(bytes.fromhex(mastercard["DF8A01"]))
+        contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
+        normal = values_by_tag(contactless.value.hex())
+        self.assertEqual(normal["DF8120"], "F45084800C")
+        self.assertEqual(normal["DF8121"], "0000000000")
+        self.assertEqual(normal["DF8122"], "F45084800C")
+        refund = values_by_tag(normal["DF840A"])
+        self.assertEqual(refund["DF8120"], "0000000000")
+        self.assertEqual(refund["DF8121"], "FFFFFFFFFF")
+        self.assertEqual(refund["DF8122"], "0000000000")
+        self.assertTrue(
+            any(
+                "refund contactless TAC encoded under DF8A01 -> DF8407 -> DF840A"
+                in notice
+                for notice in mastercard_profile["notices"]
+            )
+        )
+
+    def test_flat_conflicting_contactless_tac_values_remain_blocked(self) -> None:
+        rows = list(ROWS)
+        rows.extend(
+            [
+                ("Contactless Interface - Mastercard - TAC Denial", "FF FF FF FF FF"),
+                ("Contactless Interface - Mastercard - TAC Online", "00 00 00 00 00"),
+                ("Contactless Interface - Mastercard - TAC Default", "00 00 00 00 00"),
+            ]
+        )
+        temp, path = self.write_report(rows)
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(
+            tse.TseError,
+            "Contactless Interface - Mastercard - TAC Default.*conflicting values",
+        ):
+            tse.build_report(path, self.catalog, "156")
 
     def test_malformed_contactless_refund_configuration_is_rejected(self) -> None:
         malformed = "9F0607A0000000041010DF8A0109DF840705DF840A01FF"
@@ -282,7 +384,7 @@ class TseAidTests(unittest.TestCase):
             "B0",
         )
 
-    def test_unknown_country_uses_disclosed_0840_default(self) -> None:
+    def test_inspect_requires_authoritative_currency_lookup_without_default(self) -> None:
         rows = [
             (label, "Atlantis" if label == "Deployment country" else value)
             for label, value in ROWS
@@ -290,20 +392,63 @@ class TseAidTests(unittest.TestCase):
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
         result = tse.analyze(path, self.catalog)
-        self.assertEqual(result["currency_5F2A"], "0840")
-        self.assertTrue(result["currency_defaulted"])
-        self.assertTrue(any("0840" in notice for notice in result["notices"]))
+        self.assertIsNone(result["currency_5F2A"])
+        self.assertTrue(result["currency_lookup_required"])
+        self.assertTrue(
+            any(
+                "authoritative ISO 4217" in notice
+                and "no 0840 fallback is permitted" in notice
+                for notice in result["notices"]
+            )
+        )
+
+    def test_build_without_currency_code_is_blocked(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        with self.assertRaisesRegex(tse.TseError, "no 0840 fallback is permitted"):
+            tse.build_report(path, self.catalog)
+
+    def test_supplied_iso_code_is_bcd_normalized_and_exponent_is_omitted(self) -> None:
+        rows = [
+            (label, "Malaysia" if label == "Deployment country" else value)
+            for label, value in ROWS
+        ]
+        temp, path = self.write_report(rows)
+        self.addCleanup(temp.cleanup)
+        result = tse.build_report(path, self.catalog, "458")
+        self.assertEqual(result["analysis"]["currency_5F2A"], "0458")
+        self.assertIsNone(result["analysis"]["currency_exponent_5F36"])
+        for profile in result["aids"]:
+            values = values_by_tag(profile["tlv"])
+            self.assertEqual(values["5F2A"], "0458")
+            self.assertNotIn("5F36", values)
+        self.assertTrue(
+            any(
+                "confirm whether this transaction currency needs to be changed" in notice
+                for notice in result["analysis"]["notices"]
+            )
+        )
+
+    def test_currency_exponent_is_written_only_when_explicit(self) -> None:
+        temp, path = self.write_report(ROWS)
+        self.addCleanup(temp.cleanup)
+        result = tse.build_report(path, self.catalog, "156", "3")
+        self.assertEqual(result["analysis"]["currency_exponent_5F36"], "03")
+        for profile in result["aids"]:
+            self.assertEqual(values_by_tag(profile["tlv"])["5F36"], "03")
 
     def test_build_command_prints_complete_tlvs_before_analysis(self) -> None:
         temp, path = self.write_report(ROWS)
         self.addCleanup(temp.cleanup)
-        expected = tse.build_report(path, self.catalog)
+        expected = tse.build_report(path, self.catalog, "156")
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             tse.command_build(
                 argparse.Namespace(
                     report=str(path),
                     catalog=str(tse.default_catalog_path()),
+                    currency_code="156",
+                    currency_exponent=None,
                     json=False,
                 )
             )
@@ -350,13 +495,13 @@ class TseAidTests(unittest.TestCase):
         )
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
-        result = tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog, "156")
         self.assertEqual(len(result["aids"]), 3)
         maestro_profile = next(
             item for item in result["aids"] if item["scheme"] == "maestro"
         )
         maestro = values_by_tag(maestro_profile["tlv"])
-        self.assertEqual(maestro_profile["byte_length"], 183)
+        self.assertEqual(maestro_profile["byte_length"], 179)
         self.assertEqual(maestro["9F06"], "A0000000043060")
         self.assertEqual(maestro["DF810C"], "02")
         self.assertEqual(maestro["9F1D"], "4C00800000000000")
@@ -403,7 +548,7 @@ class TseAidTests(unittest.TestCase):
         )
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
-        result = tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog, "156")
         maestro_profile = next(
             item for item in result["aids"] if item["scheme"] == "maestro"
         )

@@ -1,32 +1,12 @@
 {
   "schema_version": 1,
   "description": "RTOS/Linux SDK AID base profiles used as complete-record inputs before Mastercard TSE report overrides.",
-  "unknown_currency_default": {
-    "code": "0840",
-    "exponent": "02",
-    "notice": "The deployment country did not resolve to a known currency profile, so 5F2A=0840 and 5F36=02 were applied. Confirm the actual transaction currency before deployment."
+  "currency_policy": {
+    "require_authoritative_iso_4217_lookup": true,
+    "require_explicit_currency_code_for_build": true,
+    "forbid_unknown_country_fallback": true,
+    "omit_5f36_unless_user_specified": true
   },
-  "country_currency": [
-    {
-      "names": [
-        "China",
-        "PRC",
-        "People's Republic of China"
-      ],
-      "code": "0156",
-      "exponent": "02"
-    },
-    {
-      "names": [
-        "United States",
-        "United States of America",
-        "USA",
-        "US"
-      ],
-      "code": "0840",
-      "exponent": "02"
-    }
-  ],
   "tse_policy": {
     "9f33_unknown_bit_defaults": {
       "1": "1",

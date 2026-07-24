@@ -59,7 +59,7 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 1. Treat "which AIDs should I configure?", "what AID configuration is required?", a request to generate AIDs from a TSE/L3 report, or a TSE/L3 report supplied without a narrower question as a request for the complete validated `MfSdkEmvSetAid` TLV for every in-scope AID. Do not interpret "AID" as a request for only Tag `9F06`.
 2. When complete records can be generated, begin the final answer with the AID TLVs. Put each complete uppercase TLV on exactly one continuous line in its own fenced `text` code block. Do not insert spaces, line breaks, separators, comments, Tag labels, or ellipses inside a TLV.
-3. After all requested TLVs, explain their order and report brand, `9F06`, `DF810C`, byte length, derived/defaulted values, validation result, and necessary SDK caveats. Do not lead with a brand/`9F06` table and do not ask whether the user wants the complete TLVs.
+3. After all requested TLVs, explain their order and report brand, `9F06`, `DF810C`, byte length, derived/defaulted values, validation result, and necessary SDK caveats. State the ISO 4217 numeric currency encoded in `5F2A` and ask the user to confirm whether it needs to change. When the user did not explicitly specify a currency exponent, state that `5F36` was omitted. Do not lead with a brand/`9F06` table and do not ask whether the user wants the complete TLVs.
 4. If the user explicitly requests only one brand, output only that brand's complete TLV. If a complete record cannot be generated safely, explain the exact blocker instead of returning a partial TLV or presenting a `9F06` list as the configuration result.
 5. Provide C arrays or `MfSdkEmvSetAid` calls only when requested; the default deliverable is the complete TLV.
 
@@ -74,14 +74,14 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 3. Treat exact report values as overrides of the complete base profile. Convert binary masks and decimal amounts only with the documented deterministic rules. Never encode `?`, `N/A`, an external-table pointer, or another placeholder.
 4. Resolve `9F33` binary masks byte by byte: default `?` to `1` in byte 1 and to `0` in byte 3; require an explicit policy for any other unresolved bit.
-5. Resolve currency from the deployment country through the catalog. If the country is unknown, apply `5F2A=0840` and `5F36=02`, then explicitly tell the user that currency `0840` was defaulted and must be changed when it is not the actual currency.
-6. Keep contact TAC at the top level and use the registry mapping for Mastercard/Maestro contactless TAC under `DF8A01 -> DF8407`. Follow the SDK mapping even when a base template has Default and Online values swapped, and report the correction.
+5. Read the deployment country, then look up its current ISO 4217 numeric transaction-currency code from the authoritative ISO 4217 Maintenance Agency source. Pass the looked-up code with `--currency-code`; never use `0840` or another code as an unknown-country fallback. ISO codes are three decimal digits, while `5F2A` is two-byte packed BCD, so the generator left-pads the value (for example, Malaysia `458` becomes `5F2A=0458`). In the answer, state the `5F2A` value used and ask the user to confirm whether the transaction currency should be changed. Do not configure `5F36` unless the user explicitly specifies a currency exponent; only then pass `--currency-exponent`.
+6. Keep contact TAC at the top level and use the registry mapping for Mastercard/Maestro contactless TAC under `DF8A01 -> DF8407`. Preserve each contactless TAC table heading: apply the standard Purchase set to normal `DF8407`, and encode a table whose heading identifies Refund under `DF8407 -> DF840A`. Do not merge same-named TAC rows across transaction tables or report them as conflicts when their headings distinguish Purchase from Refund. Follow the SDK mapping even when a base template has Default and Online values swapped, and report the correction.
 7. Stop for any listed brand that still lacks a complete base profile. Maestro uses the catalog profile `9F06=A0000000043060`, `DF810C=02`, the Mastercard field-mapping and nesting rules, Maestro-scoped TSE values, and the fixed `9F1D=4C00800000000000`; do not substitute Mastercard-scoped TAC, limit, or CVM values when Maestro-specific values are present.
 8. Build and validate every result:
 
    ```bash
-   python3 scripts/mastercard_tse_aid.py build "<REPORT.html>"
-   python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>"
+   python3 scripts/mastercard_tse_aid.py build "<REPORT.html>" --currency-code 458
+   python3 scripts/mastercard_tse_aid.py validate "<REPORT.html>" --currency-code 458
    ```
 
 9. Follow the AID output contract. Emit every complete generated TLV before report analysis or Tag explanations; a list of brands, `9F06` values, or kernel IDs is supplemental context, not the requested configuration.
@@ -142,8 +142,8 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 
 `scripts/mastercard_tse_aid.py` parses Mastercard TSE/M-TIP L3 HTML reports:
 
-- `inspect`: list report brands and deterministically resolved `9F33` and currency values.
-- `build`: overlay report TAC, limits, capabilities, and regional currency onto complete catalog profiles and emit one validated TLV per listed AID.
+- `inspect`: list report brands, deployment country, and deterministically resolved `9F33`; without `--currency-code`, report that an authoritative currency lookup is still required.
+- `build`: overlay report TAC, limits, capabilities, and the explicitly supplied regional currency onto complete catalog profiles and emit one validated TLV per listed AID.
 - `validate`: require every listed brand to have a complete profile and validate every generated TLV.
 
 `references/aid-tag-registry.json` is the machine-readable source for migrated AID Tag length, placement, nesting, encoding, report-field mapping, and SDK-default omission rules. Put detailed Mastercard bit semantics in `references/mastercard-contactless-tags.md`; do not duplicate them in `SKILL.md`.
@@ -171,7 +171,8 @@ When extending `capk-catalog.json`, preserve all existing sources and records. A
 - Keep TSE base profiles in `references/aid-profile-catalog.json`. Do not generate a listed brand whose complete base TLV is absent.
 - Never answer an AID-configuration or TSE-report request with only brand names, `9F06`, or `DF810C`. Return complete validated AID TLVs first whenever they can be generated safely.
 - Treat TSE `9F33` question marks as constrained mask bits, not hexadecimal input. Apply only the documented byte-specific substitutions and report them.
-- Resolve TSE currency by deployment country. When no mapping exists, default to `5F2A=0840` and `5F36=02` and explicitly require the user to verify the actual currency.
+- Resolve TSE currency by looking up the deployment country's current numeric code from the authoritative ISO 4217 Maintenance Agency source. Supply that code explicitly to the generator, encode its three digits as four packed-BCD digits in `5F2A`, and never use `0840` as an unknown-country fallback. Tell the user which `5F2A` was used and ask whether it should change.
+- Omit `5F36` unless the user explicitly specifies a currency exponent. Do not infer or default `5F36=02` from the ISO minor-unit column or from a prior profile.
 - Do not use `MfSdkEmvGetAid` as a lossless backup of other parameters; it does not return the stored `DF8A01`/`DF8406`/`DF8407` content.
 - Preserve the original tag order unless there is a concrete reason to change it.
 - When editing repository code, locate the actual configuration call site before changing files and keep unrelated AIDs untouched.

@@ -10,6 +10,7 @@ SDK defaults, TSE field names, and encoding identifiers.
 - DF8118 and DF8119
 - DF811B
 - DF8120, DF8121, and DF8122
+- Transaction-specific TAC and DF840A
 - SDK-default omission
 - Adding future Tags
 
@@ -92,6 +93,34 @@ Keep contact TAC values separate at the top level:
 
 Do not swap Default and Online to follow the visual order of a source table or a
 legacy template.
+
+## Transaction-specific TAC and DF840A
+
+Treat each TSE contactless TAC table as a separate transaction profile. Use the
+table heading to distinguish the profiles:
+
+- Encode the standard Purchase table's `DF8120`, `DF8121`, and `DF8122`
+  directly under `DF8407`.
+- Encode a table whose heading contains `Refund` as a complete nested TLV
+  stream inside `DF840A`, itself under the same `DF8407`.
+
+Example hierarchy:
+
+```text
+DF8A01
+  DF8407
+    DF8120 <purchase TAC Default>
+    DF8121 <purchase TAC Denial>
+    DF8122 <purchase TAC Online>
+    DF840A
+      DF8120 <refund TAC Default>
+      DF8121 <refund TAC Denial>
+      DF8122 <refund TAC Online>
+```
+
+Do not treat different Purchase and Refund values as conflicts merely because
+the row labels are identical. Do not apply Refund values to the normal
+`DF8120`/`DF8121`/`DF8122`.
 
 ## SDK-default omission
 
