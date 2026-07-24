@@ -22,6 +22,12 @@ Apply values in this order:
 
 Do not reuse a previous report's values merely because most fields are similar. Do not emit a final TLV when a listed brand has no complete base profile.
 
+Maestro uses the complete catalog profile with `9F06=A0000000043060`,
+`DF810C=02`, and fixed `9F1D=4C00800000000000`. Apply the same
+Mastercard tag placement, conversion, default-omission, and nesting rules, but
+take TAC, limits, CVM, and other scheme-scoped values from the Maestro rows in
+the current report whenever they are present.
+
 ## Report extraction
 
 Treat the HTML as a label/value table collection. The export can contain malformed table nesting, so parse closed `tr` rows and their `td` or `th` cells without relying on strict DOM hierarchy.
@@ -112,7 +118,7 @@ Current catalog status:
 
 - Mastercard `A0000000041010`, kernel `02`: complete user-provided base profile.
 - Mastercard China `A0000000108888`, kernel `07`: complete user-provided base profile.
-- Maestro `A0000000043060`, kernel `02`: identity reserved, complete base TLV still required.
+- Maestro `A0000000043060`, kernel `02`: complete user-confirmed base profile using Mastercard mapping and nesting rules, Maestro-scoped report values, and fixed `9F1D=4C00800000000000`.
 
 ## Validation and reporting
 

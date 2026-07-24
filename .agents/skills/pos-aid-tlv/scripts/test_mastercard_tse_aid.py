@@ -292,7 +292,7 @@ class TseAidTests(unittest.TestCase):
         self.assertTrue(result["currency_defaulted"])
         self.assertTrue(any("0840" in notice for notice in result["notices"]))
 
-    def test_maestro_without_complete_template_is_blocked(self) -> None:
+    def test_builds_maestro_with_mastercard_rules_and_maestro_values(self) -> None:
         rows = [
             (
                 label,
@@ -302,10 +302,55 @@ class TseAidTests(unittest.TestCase):
             )
             for label, value in ROWS
         ]
+        rows.extend(
+            [
+                (
+                    "Contactless Interface - Maestro - CVM supported above CVM Required Limit",
+                    "Online PIN",
+                ),
+                ("Contactless Interface - Maestro - CDCVM supported", "True"),
+                (
+                    "Contactless Interface - Maestro - Transaction Limit (CDCVM) value",
+                    "999999999999",
+                ),
+                (
+                    "Contactless Interface - Maestro - Transaction Limit (No CDCVM) value",
+                    "999999999999",
+                ),
+                (
+                    "Contactless Interface - Maestro - CVM Required Limit value",
+                    "000000100000",
+                ),
+                ("Contactless Interface - Maestro - Floor Limit value", "0"),
+                ("Contactless Interface - Maestro - TAC Denial", "00 00 80 00 00"),
+                ("Contactless Interface - Maestro - TAC Online", "F4 50 04 80 0C"),
+                ("Contactless Interface - Maestro - TAC Default", "F4 50 04 80 0C"),
+            ]
+        )
         temp, path = self.write_report(rows)
         self.addCleanup(temp.cleanup)
-        with self.assertRaisesRegex(tse.TseError, "Maestro.*no certified complete base_tlv"):
-            tse.build_report(path, self.catalog)
+        result = tse.build_report(path, self.catalog)
+        self.assertEqual(len(result["aids"]), 3)
+        maestro_profile = next(
+            item for item in result["aids"] if item["scheme"] == "maestro"
+        )
+        maestro = values_by_tag(maestro_profile["tlv"])
+        self.assertEqual(maestro_profile["byte_length"], 178)
+        self.assertEqual(maestro["9F06"], "A0000000043060")
+        self.assertEqual(maestro["DF810C"], "02")
+        self.assertEqual(maestro["9F1D"], "4C00800000000000")
+        self.assertEqual(maestro["DF19"], "000000000000")
+        self.assertEqual(maestro["DF20"], "999999999999")
+        self.assertEqual(maestro["DF21"], "000000100000")
+        wrappers = aid_tlv.parse_tlv(bytes.fromhex(maestro["DF8A01"]))
+        contactless = next(item for item in wrappers if item.tag_hex == "DF8407")
+        nested = values_by_tag(contactless.value.hex())
+        self.assertEqual(nested["DF8120"], "F45004800C")
+        self.assertEqual(nested["DF8121"], "0000800000")
+        self.assertEqual(nested["DF8122"], "F45004800C")
+        self.assertEqual(nested["DF8118"], "40")
+        self.assertNotIn("DF8119", nested)
+        self.assertEqual(nested["DF811B"], "B0")
 
     def test_new_aid_build_defaults_df01_to_partial_matching(self) -> None:
         stdout = io.StringIO()

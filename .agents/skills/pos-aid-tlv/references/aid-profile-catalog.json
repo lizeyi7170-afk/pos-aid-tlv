@@ -69,10 +69,12 @@
       "aid": "A0000000043060",
       "kernel_id": "02",
       "environment": "certification",
-      "status": "template-required",
-      "source": "A certified complete Maestro base template has not been supplied.",
-      "base_tlv": null,
-      "fixed_overrides": {}
+      "status": "user-confirmed",
+      "source": "User-confirmed Maestro profile, 2026-07-24: use A0000000043060 with kernel 02 and the Mastercard base structure and field-mapping rules; apply Maestro-scoped TSE values",
+      "base_tlv": "DF810C01029F0607A0000000043060DF0101009F09020002DF1105FE50BCA000DF1205FE50BCF800DF130500000000009F1B0400000000DF1504100000009F1D086C01800000000000DF160101DF170101DF14039F3704DF180101DF1906000000000000DF2006000000100000DF2106000000030000DF8A0124DF840720DF8121050000000000DF812005F45084800CDF812205F45084800CDF811B01B0",
+      "fixed_overrides": {
+        "9F1D": "4C00800000000000"
+      }
     }
   ]
 }

@@ -68,7 +68,7 @@ Use the SDK implementation—not generic EMV assumptions—as the source of trut
 4. Resolve `9F33` binary masks byte by byte: default `?` to `1` in byte 1 and to `0` in byte 3; require an explicit policy for any other unresolved bit.
 5. Resolve currency from the deployment country through the catalog. If the country is unknown, apply `5F2A=0840` and `5F36=02`, then explicitly tell the user that currency `0840` was defaulted and must be changed when it is not the actual currency.
 6. Keep contact TAC at the top level and use the registry mapping for Mastercard/Maestro contactless TAC under `DF8A01 -> DF8407`. Follow the SDK mapping even when a base template has Default and Online values swapped, and report the correction.
-7. Stop for a missing complete base profile. A report listing Maestro requires a certified Maestro template; recognizing its AID is not enough to construct a complete record safely.
+7. Stop for any listed brand that still lacks a complete base profile. Maestro uses the catalog profile `9F06=A0000000043060`, `DF810C=02`, the Mastercard field-mapping and nesting rules, Maestro-scoped TSE values, and the fixed `9F1D=4C00800000000000`; do not substitute Mastercard-scoped TAC, limit, or CVM values when Maestro-specific values are present.
 8. Build and validate every result:
 
    ```bash
